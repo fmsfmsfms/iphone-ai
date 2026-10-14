@@ -31,3 +31,6 @@ playwright-report/
 .vscode/*
 !.vscode/extensions.json
 .idea/
+
+# Build caches (official Node.js download)
+.cache/

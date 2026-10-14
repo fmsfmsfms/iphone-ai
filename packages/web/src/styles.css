@@ -1,0 +1,318 @@
+@import "tailwindcss";
+@import "@heroui/styles";
+
+/* ==========================================================================
+   iPhone AI theme — deep black / charcoal, hairline borders, blue→purple for
+   AI activity, amber warnings, red for STOP, green for healthy states.
+   Unlayered overrides win over HeroUI's layered theme variables.
+   ========================================================================== */
+
+:root {
+  --font-app: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display", Inter, "Segoe UI", system-ui, sans-serif;
+  --font-app-mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
+  --radius: 0.625rem;
+
+  --app-accent-blue: #0a84ff;
+  --app-accent-purple: #bf5af2;
+  --app-green: #30d158;
+  --app-amber: #ff9f0a;
+  --app-red: #ff453a;
+
+  --app-ai-gradient: linear-gradient(135deg, var(--app-accent-blue) 0%, #5e5ce6 50%, var(--app-accent-purple) 100%);
+  --app-ai-soft: linear-gradient(135deg, rgb(10 132 255 / 0.14), rgb(191 90 242 / 0.14));
+
+  --app-transition: 180ms cubic-bezier(0.2, 0, 0, 1);
+}
+
+.dark,
+[data-theme="dark"] {
+  --background: #0a0a0b;
+  --foreground: #f5f5f7;
+  --surface: #111113;
+  --surface-foreground: #f5f5f7;
+  --surface-secondary: #17171a;
+  --surface-tertiary: #1e1e22;
+  --overlay: #1a1a1d;
+  --overlay-foreground: #f5f5f7;
+  --muted: #9a9aa2;
+  --default: #232327;
+  --default-foreground: #f5f5f7;
+  --field-background: #17171a;
+  --field-foreground: #f5f5f7;
+  --border: rgb(255 255 255 / 0.08);
+  --separator: rgb(255 255 255 / 0.06);
+  --accent: var(--app-accent-blue);
+  --accent-foreground: #ffffff;
+  --success: var(--app-green);
+  --success-foreground: #04120a;
+  --warning: var(--app-amber);
+  --warning-foreground: #1a1000;
+  --danger: var(--app-red);
+  --danger-foreground: #ffffff;
+  --backdrop: rgb(0 0 0 / 0.62);
+  --overlay-shadow: 0 0 0 1px rgb(255 255 255 / 0.08) inset, 0 18px 48px rgb(0 0 0 / 0.55);
+
+  --app-hairline: rgb(255 255 255 / 0.08);
+  --app-hairline-strong: rgb(255 255 255 / 0.14);
+  --app-glass: rgb(17 17 19 / 0.72);
+  --app-glass-strong: rgb(23 23 26 / 0.86);
+  --app-hover: rgb(255 255 255 / 0.05);
+  --app-active: rgb(255 255 255 / 0.08);
+  --app-bezel: #050506;
+  --app-bezel-edge: #2a2a2f;
+}
+
+.light,
+[data-theme="light"] {
+  --accent: #007aff;
+  --app-hairline: rgb(0 0 0 / 0.08);
+  --app-hairline-strong: rgb(0 0 0 / 0.14);
+  --app-glass: rgb(255 255 255 / 0.72);
+  --app-glass-strong: rgb(255 255 255 / 0.88);
+  --app-hover: rgb(0 0 0 / 0.04);
+  --app-active: rgb(0 0 0 / 0.07);
+  --app-bezel: #111113;
+  --app-bezel-edge: #3a3a40;
+}
+
+@theme inline {
+  --font-sans: var(--font-app);
+  --font-mono: var(--font-app-mono);
+  --color-hairline: var(--app-hairline);
+  --color-hairline-strong: var(--app-hairline-strong);
+  --color-glass: var(--app-glass);
+  --color-hover: var(--app-hover);
+  --color-active: var(--app-active);
+  --color-ai-blue: var(--app-accent-blue);
+  --color-ai-purple: var(--app-accent-purple);
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  font-family: var(--font-app);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+  overflow: hidden;
+}
+
+::selection {
+  background: rgb(10 132 255 / 0.35);
+}
+
+/* Thin, quiet scrollbars inside the app's own scroll areas. */
+.app-scroll {
+  overflow: auto;
+  scrollbar-width: thin;
+  scrollbar-color: rgb(255 255 255 / 0.14) transparent;
+}
+
+/* ----- Surfaces ---------------------------------------------------------- */
+
+.app-panel {
+  background: var(--surface);
+  border: 1px solid var(--app-hairline);
+  border-radius: 1rem;
+}
+
+.app-glass {
+  background: var(--app-glass);
+  -webkit-backdrop-filter: blur(20px) saturate(150%);
+  backdrop-filter: blur(20px) saturate(150%);
+}
+
+.app-glass-strong {
+  background: var(--app-glass-strong);
+  -webkit-backdrop-filter: blur(24px) saturate(160%);
+  backdrop-filter: blur(24px) saturate(160%);
+}
+
+.app-hairline {
+  border-color: var(--app-hairline);
+}
+
+.app-transition {
+  transition:
+    background-color var(--app-transition),
+    color var(--app-transition),
+    border-color var(--app-transition),
+    opacity var(--app-transition),
+    box-shadow var(--app-transition),
+    transform var(--app-transition);
+}
+
+/* ----- AI accents -------------------------------------------------------- */
+
+.ai-gradient-bg {
+  background: var(--app-ai-gradient);
+}
+
+.ai-soft-bg {
+  background: var(--app-ai-soft);
+}
+
+.ai-gradient-text {
+  background: var(--app-ai-gradient);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+.ai-ring {
+  box-shadow:
+    0 0 0 1px rgb(94 92 230 / 0.45),
+    0 0 24px rgb(94 92 230 / 0.18);
+}
+
+.chip.chip--ai {
+  --chip-bg: var(--app-ai-soft);
+  --chip-fg: #c9c4ff;
+  background: var(--app-ai-soft);
+}
+
+/* ----- Status dot -------------------------------------------------------- */
+
+.status-dot {
+  display: inline-block;
+  width: 0.4375rem;
+  height: 0.4375rem;
+  border-radius: 9999px;
+  background: currentColor;
+  flex-shrink: 0;
+}
+
+.status-dot--pulse {
+  animation: status-pulse 1.8s ease-in-out infinite;
+}
+
+@keyframes status-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+
+/* ----- STOP button ------------------------------------------------------- */
+
+.stop-button {
+  background: linear-gradient(180deg, #ff5a4f 0%, #e5352b 100%);
+  color: #fff;
+  box-shadow:
+    0 0 0 1px rgb(255 255 255 / 0.12) inset,
+    0 6px 18px rgb(255 69 58 / 0.32);
+}
+
+.stop-button:hover {
+  filter: brightness(1.06);
+}
+
+.stop-button:active {
+  transform: scale(0.98);
+}
+
+/* ----- Phone bezel ------------------------------------------------------- */
+
+.phone-bezel {
+  position: relative;
+  background: var(--app-bezel);
+  box-shadow:
+    0 0 0 1px var(--app-bezel-edge),
+    0 0 0 4px rgb(0 0 0 / 0.65),
+    0 30px 60px -20px rgb(0 0 0 / 0.75),
+    0 12px 24px -12px rgb(0 0 0 / 0.6);
+}
+
+.phone-screen {
+  position: relative;
+  overflow: hidden;
+  background: #000;
+}
+
+.phone-screen img {
+  user-select: none;
+  -webkit-user-drag: none;
+  pointer-events: none;
+}
+
+.touch-ripple {
+  position: absolute;
+  width: 44px;
+  height: 44px;
+  /* Physical offsets: positions are computed from the image's left edge. */
+  margin-left: -22px;
+  margin-top: -22px;
+  border-radius: 9999px;
+  border: 2px solid rgb(255 255 255 / 0.9);
+  background: rgb(10 132 255 / 0.28);
+  pointer-events: none;
+  animation: touch-ripple 450ms ease-out forwards;
+}
+
+.touch-ripple--long {
+  animation-duration: 900ms;
+  background: rgb(191 90 242 / 0.3);
+}
+
+@keyframes touch-ripple {
+  from {
+    transform: scale(0.4);
+    opacity: 1;
+  }
+  to {
+    transform: scale(1.5);
+    opacity: 0;
+  }
+}
+
+/* ----- Resizable separators --------------------------------------------- */
+
+.app-separator {
+  position: relative;
+  width: 1px;
+  background: var(--app-hairline);
+  transition: background-color var(--app-transition);
+}
+
+.app-separator::after {
+  content: "";
+  position: absolute;
+  inset: 0 -4px;
+}
+
+.app-separator:hover,
+.app-separator[data-separator="hover"],
+.app-separator[data-separator="active"],
+.app-separator[data-separator="focus"] {
+  background: var(--app-accent-blue);
+}
+
+/* ----- Misc -------------------------------------------------------------- */
+
+.caret-blink::after {
+  content: "▍";
+  margin-inline-start: 1px;
+  animation: caret 1s steps(2, start) infinite;
+  color: var(--muted);
+}
+
+@keyframes caret {
+  to {
+    visibility: hidden;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .status-dot--pulse,
+  .touch-ripple,
+  .caret-blink::after {
+    animation: none;
+  }
+}
