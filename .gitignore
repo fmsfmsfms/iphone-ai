@@ -1,0 +1,33 @@
+# Dependencies
+node_modules/
+.pnpm-store/
+
+# Build output
+dist/
+build/
+coverage/
+*.tsbuildinfo
+packages/web/dist/
+src-tauri/target/
+src-tauri/binaries/
+src-tauri/resources/server/
+release/
+
+# Local runtime data (never commit device data, screenshots, logs, secrets)
+.data/
+*.sqlite
+*.sqlite-*
+*.log
+.env
+.env.*
+!.env.example
+
+# Test artifacts
+test-results/
+playwright-report/
+
+# OS / editor
+.DS_Store
+.vscode/*
+!.vscode/extensions.json
+.idea/
