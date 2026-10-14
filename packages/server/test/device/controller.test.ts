@@ -64,6 +64,16 @@ describe('authorisation', () => {
     lease.release();
   });
 
+  it('refuses AI and workflow input in Observe Only mode even with an allow decision', async () => {
+    const c = await connected(SUPERVISED);
+    const lease = c.device.acquireLease('ai', 'Test task');
+    c.settings.update({ permissions: { controlMode: 'observe' } });
+    const err = await rejection(c.device.perform(TAP_SETTINGS, { actor: 'ai', leaseId: lease.id, geometryId: GEOMETRY, decision: ALLOW }));
+    expect(err).toMatchObject({ code: 'not_authorized', status: 403 });
+    expect(c.calledTools()).not.toContain('tap');
+    lease.release();
+  });
+
   it('refuses denied decisions', async () => {
     const c = await connected(MANUAL);
     const err = await rejection(c.device.perform(TAP_SETTINGS, user({ decision: { verdict: 'deny', risk: 'high', reasons: ['No.'], rules: ['x'] } })));
@@ -244,9 +254,10 @@ describe('actions', () => {
     const describe = c.device.describe({ includeImage: false }).then(() => order.push('describe'));
     await Promise.all([tap, describe]);
     expect(order).toEqual(['tap', 'describe']);
-    // The status re-read happens inside the action job, right before the tap.
+    // The status re-read happens inside each job, right before the tap and
+    // right before the capture.
     const names = c.calledTools();
-    expect(names.slice(names.indexOf('tap') - 1, names.indexOf('tap') + 2)).toEqual(['status', 'tap', 'describe_screen']);
+    expect(names.slice(names.indexOf('tap') - 1, names.indexOf('tap') + 3)).toEqual(['status', 'tap', 'status', 'describe_screen']);
   });
 });
 
@@ -393,7 +404,7 @@ describe('screen capture', () => {
     const battery = await c.device.describe({ includeImage: false, settleFirst: true });
     expect(battery.elements.map((e) => e.label)).toEqual(expect.arrayContaining(['Battery Percentage', '87%']));
     expect(battery.fingerprint).not.toBe(d.fingerprint);
-    expect(c.calledTools().slice(-2)).toEqual(['screenshot', 'describe_screen']);
+    expect(c.calledTools().slice(-4)).toEqual(['status', 'screenshot', 'status', 'describe_screen']);
   });
 
   it('surfaces describe_screen failures as tool_failed', async () => {

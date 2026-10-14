@@ -54,7 +54,14 @@ interface SessionRow {
 }
 
 export const DESKTOP_SESSION_TTL_MS = 30 * 24 * 3_600_000;
-export const LOCAL_BROWSER_SESSION_TTL_MS = 24 * 3_600_000;
+/**
+ * Cookies are not isolated by port (RFC 6265 §8.5): a browser also sends the
+ * local-browser cookie to any other service on 127.0.0.1. Until sessions are
+ * bound to a secret only this origin holds, keep that exposure short: the
+ * cookie lasts for the browser session only, expires after 8 h, and every
+ * backend launch revokes it.
+ */
+export const LOCAL_BROWSER_SESSION_TTL_MS = 8 * 3_600_000;
 const LOGIN_CODE_TTL_MS = 2 * 60_000;
 const TOUCH_INTERVAL_MS = 60_000;
 const HOUSEKEEPING_AGE_MS = 30 * 24 * 3_600_000;
@@ -101,15 +108,27 @@ export function clearSessionCookie(reply: FastifyReply): void {
   void reply.clearCookie(SESSION_COOKIE, { httpOnly: true, sameSite: 'strict', path: '/', secure: false });
 }
 
-/** In-memory failure counter for passcode logins (per IP plus a global ceiling). */
+/** Outcome of reserving a login attempt: refused (waitMs > 0) or a ticket to pass to finish(). */
+export type LoginReservation = { waitMs: number; ticket: null; busy: boolean } | { waitMs: 0; ticket: number; busy: false };
+
+/**
+ * In-memory failure counter for passcode logins (per IP plus a global
+ * ceiling). Verification is slow and asynchronous (Keychain read + scrypt),
+ * so an attempt is reserved — counted as a failure and marked in flight —
+ * synchronously before verifying; finish() un-counts it unless it failed.
+ * Concurrent attempts can therefore never overtake the limits.
+ */
 export class LoginRateLimiter {
   private readonly failures = new Map<string, number[]>();
   private global: number[] = [];
+  private readonly inFlight = new Map<string, number>();
+  private globalInFlight = 0;
 
   constructor(
     private readonly maxFailures = 5,
     private readonly windowMs = 5 * 60_000,
     private readonly maxGlobalFailures = 50,
+    private readonly maxGlobalInFlight = 4,
   ) {}
 
   /** Milliseconds until another attempt is allowed (0 = allowed now). */
@@ -120,6 +139,39 @@ export class LoginRateLimiter {
     if (own.length >= this.maxFailures) wait = Math.max(wait, own[0]! + this.windowMs - now);
     if (this.global.length >= this.maxGlobalFailures) wait = Math.max(wait, this.global[0]! + this.windowMs - now);
     return Math.max(0, wait);
+  }
+
+  /**
+   * Checks the limits and reserves one attempt in the same synchronous step:
+   * at most one verification per IP (and a few globally) runs at a time, and
+   * the attempt counts as a failure until finish() says otherwise.
+   */
+  reserve(ip: string, now = Date.now()): LoginReservation {
+    const wait = this.retryAfterMs(ip, now);
+    if (wait > 0) return { waitMs: wait, ticket: null, busy: false };
+    if ((this.inFlight.get(ip) ?? 0) >= 1 || this.globalInFlight >= this.maxGlobalInFlight) {
+      return { waitMs: 1000, ticket: null, busy: true };
+    }
+    this.fail(ip, now);
+    this.inFlight.set(ip, (this.inFlight.get(ip) ?? 0) + 1);
+    this.globalInFlight += 1;
+    return { waitMs: 0, ticket: now, busy: false };
+  }
+
+  /** Ends a reserved attempt; only an invalid passcode keeps counting as a failure. */
+  finish(ip: string, ticket: number, outcome: 'ok' | 'invalid' | 'not_configured'): void {
+    const running = (this.inFlight.get(ip) ?? 1) - 1;
+    if (running <= 0) this.inFlight.delete(ip);
+    else this.inFlight.set(ip, running);
+    this.globalInFlight = Math.max(0, this.globalInFlight - 1);
+    if (outcome === 'invalid') return;
+    const own = this.failures.get(ip);
+    const index = own?.indexOf(ticket) ?? -1;
+    if (own && index >= 0) own.splice(index, 1);
+    if (own?.length === 0) this.failures.delete(ip);
+    const globalIndex = this.global.indexOf(ticket);
+    if (globalIndex >= 0) this.global.splice(globalIndex, 1);
+    if (outcome === 'ok') this.succeed(ip);
   }
 
   fail(ip: string, now = Date.now()): void {
@@ -185,14 +237,18 @@ export class AuthService {
 
   /**
    * Called once per backend launch: desktop sessions are bound to the
-   * per-launch token, so sessions from earlier launches are revoked. Old rows
+   * per-launch token, so sessions from earlier launches are revoked, and so
+   * are local-browser sessions (see LOCAL_BROWSER_SESSION_TTL_MS). Old rows
    * are purged.
    */
   startup(): void {
     if (this.started) return;
     this.started = true;
     const now = Date.now();
-    this.ctx.db.run("UPDATE remote_sessions SET revoked_at = ? WHERE kind = 'desktop' AND revoked_at IS NULL", now);
+    this.ctx.db.run(
+      "UPDATE remote_sessions SET revoked_at = ? WHERE kind IN ('desktop', 'local-browser') AND revoked_at IS NULL",
+      now,
+    );
     this.ctx.db.run(
       'DELETE FROM remote_sessions WHERE expires_at < ? OR (revoked_at IS NOT NULL AND revoked_at < ?)',
       now - HOUSEKEEPING_AGE_MS,

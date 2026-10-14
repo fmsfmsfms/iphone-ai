@@ -3,6 +3,8 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { CSRF_HEADER, SESSION_COOKIE } from '@iphone-ai/shared';
 
+import { AuthService } from '../../src/http/auth.js';
+import { startLocalServer } from '../../src/http/server.js';
 import {
   createHarness,
   DESKTOP_TOKEN,
@@ -10,6 +12,7 @@ import {
   LOCAL_ORIGIN,
   localHeaders,
   loginDesktop,
+  rawHttpStatus,
   sessionCookieFrom,
   type Harness,
 } from './harness.js';
@@ -177,6 +180,26 @@ describe('HTTP security (local listener)', () => {
     expect(fromBrowser.json()).toMatchObject({ error: { code: 'desktop_only' } });
   });
 
+  it('keeps local-browser sessions short-lived: browser-session cookie, 8 h, revoked on the next launch', async () => {
+    const cookie = await loginDesktop(h);
+    const link = await h.local.app.inject({ method: 'POST', url: '/api/auth/browser-link', headers: localHeaders(cookie), payload: {} });
+    const exchange = await h.local.app.inject({ method: 'GET', url: link.json<{ url: string }>().url.replace(LOCAL_ORIGIN, ''), headers: { host: LOCAL_HOST } });
+    expect(exchange.statusCode).toBe(302);
+    const raw = String(exchange.headers['set-cookie']);
+    expect(raw).not.toMatch(/Max-Age/i);
+    expect(raw).not.toMatch(/Expires/i);
+    const browserCookie = sessionCookieFrom(exchange.headers['set-cookie']);
+    const row = h.ctx.db.get<{ created_at: number; expires_at: number }>("SELECT created_at, expires_at FROM remote_sessions WHERE kind = 'local-browser'");
+    expect(row!.expires_at - row!.created_at).toBe(8 * 3_600_000);
+    const before = await h.local.app.inject({ method: 'GET', url: '/api/auth/session', headers: localHeaders(browserCookie) });
+    expect(before.statusCode).toBe(200);
+
+    // The next backend launch revokes it (like desktop sessions).
+    new AuthService(h.ctx).startup();
+    const after = await h.local.app.inject({ method: 'GET', url: '/api/auth/session', headers: localHeaders(browserCookie) });
+    expect(after.statusCode).toBe(401);
+  });
+
   it('does not expose remote-login on the local listener', async () => {
     const res = await h.local.app.inject({
       method: 'POST',
@@ -199,6 +222,60 @@ describe('HTTP security (local listener)', () => {
       payload: '',
     });
     expect(empty.statusCode).toBe(200);
+  });
+
+  it('gates percent-encoded spellings of API paths on the routed path (401 without a session)', async () => {
+    h.ctx.activity.record({ category: 'manual', type: 'tool.call', actor: 'user', summary: 'private event' });
+    for (const url of [
+      '/%61pi/settings',
+      '/ap%69/settings',
+      '/%61pi/screen/frame/latest',
+      '/%61pi/activity',
+      '/%61pi/activity/export?format=csv',
+      '/%61pi/diagnostics/export',
+      '/%61pi/connection/stderr',
+      '/%61pi/status',
+      '/%61pi/providers',
+      '/%61pi/conversations/c1/messages',
+      '/api%2Fsettings',
+      '/%61pi/nope',
+    ]) {
+      const res = await h.local.app.inject({ method: 'GET', url, headers: { host: LOCAL_HOST } });
+      expect(res.statusCode, url).toBe(401);
+      expect(res.json(), url).toMatchObject({ error: { code: 'unauthenticated' } });
+    }
+    expect(h.fakes.device.getLatestFrame).not.toHaveBeenCalled();
+    expect(h.fakes.mirroir.recentStderr).not.toHaveBeenCalled();
+
+    const ws = await h.local.app.inject({ method: 'GET', url: '/w%73', headers: { host: LOCAL_HOST, origin: LOCAL_ORIGIN } });
+    expect(ws.statusCode).toBe(401);
+
+    // Public endpoints stay public in any spelling; malformed escapes are refused.
+    const health = await h.local.app.inject({ method: 'GET', url: '/%61pi/health', headers: { host: LOCAL_HOST } });
+    expect(health.statusCode).toBe(200);
+    const malformed = await h.local.app.inject({ method: 'GET', url: '/api/%E0%A4%A', headers: { host: LOCAL_HOST } });
+    expect(malformed.statusCode).toBe(400);
+
+    // With a session the encoded spelling works and is still treated as an API response.
+    const cookie = await loginDesktop(h);
+    const ok = await h.local.app.inject({ method: 'GET', url: '/%61pi/settings', headers: { host: LOCAL_HOST, cookie } });
+    expect(ok.statusCode).toBe(200);
+    expect(ok.headers['cache-control']).toBe('no-store');
+  });
+
+  it('refuses absolute-form request targets over a real socket', async () => {
+    const server = await startLocalServer(h.ctx, { port: 0, desktopToken: DESKTOP_TOKEN, devOrigins: [] });
+    try {
+      const host = `127.0.0.1:${server.port}`;
+      expect(await rawHttpStatus(server.port, '/api/settings', host)).toBe(401);
+      expect(await rawHttpStatus(server.port, `http://${host}/api/settings`, host)).toBe(400);
+      expect(await rawHttpStatus(server.port, `http://${host}/%61pi/settings`, host)).toBe(400);
+      expect(await rawHttpStatus(server.port, 'http://evil.example/%61pi/settings', host)).toBe(400);
+      expect(await rawHttpStatus(server.port, '/%61pi/settings', host)).toBe(401);
+      expect(await rawHttpStatus(server.port, '/api/health', host)).toBe(200);
+    } finally {
+      await server.close();
+    }
   });
 
   it('serves a "not built" page at / when the UI is missing', async () => {

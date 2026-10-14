@@ -37,6 +37,8 @@ export async function runAgent(options: {
   const { provider, toolkit, signal, callbacks } = options;
 
   if (provider.kind === 'loop') {
+    // A loop provider spawns its own session; never start one for a task that is already cancelled.
+    if (signal.aborted) throw signal.reason instanceof Error ? signal.reason : new TaskAbortedError('The task was stopped.', 'cancelled');
     let reasoning = '';
     let text = '';
     const result = await provider.runLoop({

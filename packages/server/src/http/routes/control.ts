@@ -14,6 +14,7 @@ import {
   sessionLabel,
   type RouteDeps,
 } from '../guards.js';
+import { settingsForSession } from '../redaction.js';
 import { applySettingsPatch, recordSettingsChange } from '../settings-apply.js';
 
 const REFOCUS_DELAY_MS = 250;
@@ -113,7 +114,7 @@ export function registerControlRoutes(app: FastifyInstance, deps: RouteDeps): vo
     const previous = ctx.settings.get();
     const next = applySettingsPatch(ctx, { permissions: { controlMode: mode } });
     recordSettingsChange(ctx, previous, next, actorFor(session), ['permissions']);
-    return next;
+    return settingsForSession(next, session);
   });
 
   app.put('/api/control/manual', async (request) => {
@@ -125,7 +126,7 @@ export function registerControlRoutes(app: FastifyInstance, deps: RouteDeps): vo
     const previous = ctx.settings.get();
     const next = applySettingsPatch(ctx, { permissions: { manualControlEnabled: enabled } });
     recordSettingsChange(ctx, previous, next, actorFor(session), ['permissions']);
-    return next;
+    return settingsForSession(next, session);
   });
 
   app.get('/api/approvals', async (request) => {

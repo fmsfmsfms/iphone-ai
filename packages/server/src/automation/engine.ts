@@ -5,8 +5,13 @@
 //   the step, require_approval waits for the user (Assisted mode: always);
 // • text steps resolve labels live with describe_screen + ElementMatcher;
 // • pause takes effect before the next device action (the lease is paused so
-//   the user can use the phone manually), stop / emergency stop abort waits,
-//   approvals and polling immediately (an in-flight Mirroir call finishes);
+//   the user can use the phone manually; an action already queued when the
+//   pause lands is refused by the DeviceController and its step is retried
+//   once after resume), stop / emergency stop abort waits, approvals, polling
+//   and queued actions immediately (an in-flight Mirroir call finishes);
+// • passwords and codes are never typed: sensitive type_text steps and values
+//   read from a code screen are refused, and typing passes the focused field
+//   to the policy (its password / code field rule);
 // • the first failure ends the run and the remaining steps are skipped.
 
 import {
@@ -38,8 +43,10 @@ import {
   MUTATING_STEP_TYPES,
   describeStep,
   fillVariables,
+  focusedFieldGuess,
   nearestElement,
   parseKeyCombo,
+  referencedVariables,
   swipeCoordinates,
 } from './steps.js';
 import { WorkflowError, type AutomationTiming, type WorkflowAgents, type WorkflowDevice } from './types.js';
@@ -89,6 +96,9 @@ const UNKNOWN_GEOMETRY =
 const SCREEN_UNREADABLE =
   "The iPhone screen can't be read right now. iPhone Mirroring must be connected and Screen Recording allowed for iPhone AI.";
 const COMMIT_KEYS = new Set(['return', 'enter']);
+/** Keys that move the focus to another field. */
+const FOCUS_KEYS = new Set(['return', 'enter', 'tab']);
+const SECRET_STEP = 'This step types a password or code. Enter it yourself on the iPhone (replace the step with a checkpoint).';
 
 const READ_SCREEN_SYSTEM = [
   'You extract information from an iPhone screen for an automation workflow.',
@@ -109,7 +119,11 @@ export class WorkflowExecution {
   private screen: ScreenDescription | null = null;
   private screenFresh = false;
   private pendingTypedText = false;
+  /** Label of the field the last tap landed on (the likely focused field), cleared when focus may have moved. */
+  private lastTappedLabel: string | null = null;
   private readonly vars = new Map<string, string>();
+  /** Variables whose value looked like a password or code when read_screen saved it. */
+  private readonly sensitiveVars = new Set<string>();
   /** Time spent paused or waiting for approvals (excluded from the run duration limit). */
   private idleMs = 0;
   private currentStep: WorkflowStep | null = null;
@@ -243,7 +257,7 @@ export class WorkflowExecution {
 
         let out: StepOutput;
         try {
-          out = await this.executeStep(step);
+          out = await this.runStep(step);
         } catch (err) {
           failure = this.toFailure(err);
           this.currentStep = null;
@@ -290,6 +304,25 @@ export class WorkflowExecution {
     this.save();
     this.options.lease.release();
     return this.snapshot();
+  }
+
+  /**
+   * A pause that lands while a step's action waits in the device queue makes
+   * the DeviceController refuse it ('lease_paused', not executed): wait for
+   * resume, then run the step once more from the start (the screen may have
+   * changed while the user had the phone).
+   */
+  private async runStep(step: WorkflowStep): Promise<StepOutput> {
+    try {
+      return await this.executeStep(step);
+    } catch (err) {
+      if (deviceErrorCode(err) !== 'lease_paused' || this.signal.aborted) throw err;
+      this.deps.log.debug('Workflow action refused because the run was paused; retrying the step after resume', { stepId: step.id });
+      this.forgetScreen();
+      await this.gate();
+      this.throwIfStopped();
+      return this.executeStep(step);
+    }
   }
 
   private async executeStep(step: WorkflowStep): Promise<StepOutput> {
@@ -341,10 +374,21 @@ export class WorkflowExecution {
         return { message: `Swiped ${step.direction}` };
       }
       case 'type_text': {
+        const secretVar = referencedVariables(step.text).find((name) => this.sensitiveVars.has(name) && this.vars.has(name)) ?? null;
+        if (settings.permissions.blockTypingOnAuthScreens) {
+          // A password or code is never typed by a workflow (denied, not approvable).
+          if (step.sensitive === true) throw new StepFailure(SECRET_STEP);
+          if (secretVar) {
+            throw new StepFailure(
+              `{${secretVar}} looks like a password or code read from the screen, so it is not typed. Enter it yourself on the iPhone (replace the step with a checkpoint).`,
+            );
+          }
+        }
+        const secret = step.sensitive === true || secretVar !== null;
         const text = this.fill(step.text);
-        const show = step.sensitive !== true && settings.privacy.logTypedText;
+        const show = !secret && settings.privacy.logTypedText;
         const shown = show ? `“${truncate(text, 80)}”` : describeTypedText(text);
-        await this.act({ kind: 'type_text', text }, { summary: `Type ${shown}`, showTypedText: show });
+        await this.act({ kind: 'type_text', text }, { summary: `Type ${shown}`, showTypedText: show, sensitive: secret });
         return { message: `Typed ${shown}` };
       }
       case 'press_key': {
@@ -398,7 +442,7 @@ export class WorkflowExecution {
           signal: this.signal,
         });
         this.pausedTaskId = null;
-        this.screenFresh = false;
+        this.forgetScreen();
         this.pendingTypedText = false;
         if (!result.success) {
           throw new StepFailure(result.summary ? `The AI task did not succeed: ${result.summary}` : 'The AI task did not succeed.');
@@ -515,6 +559,9 @@ export class WorkflowExecution {
     this.vars.set(saveAs, value);
     const authRules = settings.permissions.sensitiveRules.filter((r) => r.id === 'auth');
     const sensitive = screenHasAuthPrompt([...texts, value]) !== null || matchSensitiveRules(value, authRules).length > 0;
+    // A later type_text must not type it (see the type_text step).
+    if (sensitive) this.sensitiveVars.add(saveAs);
+    else this.sensitiveVars.delete(saveAs);
     const parts = [
       `Saved ${provider ? 'the answer' : 'the visible text'} as {${saveAs}}`,
       sensitive ? '(hidden: the screen looks like it shows a password or code)' : '',
@@ -526,19 +573,26 @@ export class WorkflowExecution {
   /** Policy → (approval) → DeviceController for one device action. */
   private async act(
     action: DeviceAction,
-    opts: { summary: string; targetLabel?: string | null; geometryId?: string | null; showTypedText?: boolean },
+    opts: { summary: string; targetLabel?: string | null; geometryId?: string | null; showTypedText?: boolean; sensitive?: boolean },
   ): Promise<ActionResult> {
     await this.gate();
     this.throwIfStopped();
     const screenTexts = await this.screenTextsForPolicy();
     const settings = this.deps.settings.get();
+    // Text goes into the focused field: the field-like label on screen (as the AI
+    // path guesses it), else the field tapped last, so the policy's password /
+    // code field rule applies to workflow typing too.
+    const targetLabel =
+      action.kind === 'type_text'
+        ? ((this.screen ? focusedFieldGuess(this.screen.elements) : null) ?? this.lastTappedLabel)
+        : (opts.targetLabel ?? null);
     const decision = evaluatePolicy({
       actor: 'workflow',
       action,
       mode: settings.permissions.controlMode,
       permissions: settings.permissions,
       stopLatched: this.deps.device.isStopLatched,
-      target: { label: opts.targetLabel ?? null },
+      target: { label: targetLabel },
       context: { pendingTypedText: this.pendingTypedText, screenTexts },
     });
     if (decision.verdict === 'deny') {
@@ -564,32 +618,50 @@ export class WorkflowExecution {
       workflowRunId: this.run.id,
       decision,
       approvalId,
+      // Refused (also while still queued) once the run is stopped.
+      signal: this.signal,
+      ...(opts.sensitive ? { sensitive: true } : {}),
     });
     this.screenFresh = false;
     if (!result.ok) throw new StepFailure(firstLine(result.message) || `${result.tool} failed.`);
-    this.trackTyping(action);
+    this.trackTyping(action, targetLabel);
     return result;
   }
 
-  private trackTyping(action: DeviceAction): void {
+  private trackTyping(action: DeviceAction, targetLabel: string | null): void {
     switch (action.kind) {
       case 'type_text':
+        // The focus stays in the same field.
         this.pendingTypedText = true;
         break;
       case 'tap':
       case 'double_tap':
       case 'long_press':
+        this.pendingTypedText = false;
+        this.lastTappedLabel = targetLabel;
+        break;
       case 'launch_app':
       case 'press_home':
       case 'press_back':
         this.pendingTypedText = false;
+        this.lastTappedLabel = null;
         break;
-      case 'press_key':
-        if (COMMIT_KEYS.has(action.key.toLowerCase())) this.pendingTypedText = false;
+      case 'press_key': {
+        const key = action.key.toLowerCase();
+        if (COMMIT_KEYS.has(key)) this.pendingTypedText = false;
+        if (FOCUS_KEYS.has(key)) this.lastTappedLabel = null;
         break;
+      }
       default:
+        this.lastTappedLabel = null;
         break;
     }
+  }
+
+  /** Nothing is known about the screen or the focused field any more (after an AI step or manual use while paused). */
+  private forgetScreen(): void {
+    this.screenFresh = false;
+    this.lastTappedLabel = null;
   }
 
   /** Returns the approval id when approved; throws a StepFailure otherwise. */
@@ -680,6 +752,8 @@ export class WorkflowExecution {
   private async gate(): Promise<number> {
     if (!this.paused) return 0;
     const started = Date.now();
+    // The user may use the phone while paused.
+    this.forgetScreen();
     this.deps.device.setLeasePaused(this.options.lease.id, true);
     await new Promise<void>((resolve, reject) => {
       if (this.signal.aborted) {

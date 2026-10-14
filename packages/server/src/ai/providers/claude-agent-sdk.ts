@@ -125,8 +125,10 @@ export class ClaudeAgentSdkProvider implements LoopProvider {
   }
 
   async runLoop(request: LoopRequest): Promise<{ finalText: string; stop: 'finished' | 'max_turns' | 'end' | 'error'; error?: string }> {
+    // An 'abort' listener never fires for a signal that is already aborted: check first, spawn nothing.
+    throwIfAborted(request.signal);
     const abortController = new AbortController();
-    const onAbort = () => abortController.abort();
+    const onAbort = () => abortController.abort(request.signal.reason);
     request.signal.addEventListener('abort', onAbort, { once: true });
 
     const server = createSdkMcpServer({
@@ -201,8 +203,9 @@ export class ClaudeAgentSdkProvider implements LoopProvider {
   }
 
   async complete(request: { system: string; content: ModelContent[]; signal: AbortSignal; maxTokens?: number }): Promise<string> {
+    throwIfAborted(request.signal);
     const abortController = new AbortController();
-    const onAbort = () => abortController.abort();
+    const onAbort = () => abortController.abort(request.signal.reason);
     request.signal.addEventListener('abort', onAbort, { once: true });
     const user: SDKUserMessage = {
       type: 'user',
@@ -260,6 +263,11 @@ export class ClaudeAgentSdkProvider implements LoopProvider {
       };
     }
   }
+}
+
+function throwIfAborted(signal: AbortSignal): void {
+  if (!signal.aborted) return;
+  throw signal.reason instanceof Error ? signal.reason : new Error('Aborted');
 }
 
 function describeAssistantError(code: string): string {

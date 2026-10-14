@@ -77,7 +77,8 @@ export function registerAuthRoutes(app: FastifyInstance, deps: RouteDeps): void 
         ip: request.ip,
         userAgent: userAgentOf(request.headers['user-agent']),
       });
-      setSessionCookie(reply, token, LOCAL_BROWSER_SESSION_TTL_MS);
+      // Browser-session cookie (no Max-Age): it is also sent to other services on 127.0.0.1.
+      setSessionCookie(reply, token, null);
       ctx.activity.record({
         category: 'security',
         type: 'auth.local_browser',
@@ -100,18 +101,31 @@ export function registerAuthRoutes(app: FastifyInstance, deps: RouteDeps): void 
   if (deps.listener === 'remote') {
     app.post('/api/auth/remote-login', async (request, reply) => {
       const ip = request.ip;
-      const waitMs = auth.loginLimiter.retryAfterMs(ip);
-      if (waitMs > 0) {
-        void reply.header('retry-after', String(Math.ceil(waitMs / 1000)));
-        throw new HttpError(429, 'rate_limited', `Too many failed attempts. Try again in ${Math.ceil(waitMs / 60_000)} minute(s).`);
-      }
       const body = parseBody(remoteLoginSchema, request.body);
-      const verdict = await auth.verifyRemotePasscode(body.passcode);
+      // Check and reserve in one synchronous step, before the slow verification,
+      // so parallel guesses cannot all pass the limiter.
+      const reservation = auth.loginLimiter.reserve(ip);
+      if (reservation.ticket === null) {
+        const waitMs = reservation.waitMs;
+        void reply.header('retry-after', String(Math.ceil(waitMs / 1000)));
+        throw new HttpError(
+          429,
+          'rate_limited',
+          reservation.busy
+            ? 'Another sign-in attempt is still being checked. Try again in a moment.'
+            : `Too many failed attempts. Try again in ${Math.ceil(waitMs / 60_000)} minute(s).`,
+        );
+      }
+      let verdict: 'ok' | 'invalid' | 'not_configured' = 'invalid';
+      try {
+        verdict = await auth.verifyRemotePasscode(body.passcode);
+      } finally {
+        auth.loginLimiter.finish(ip, reservation.ticket, verdict);
+      }
       if (verdict === 'not_configured') {
         throw new HttpError(403, 'remote_not_configured', 'Remote access has no passcode set on the Mac.');
       }
       if (verdict === 'invalid') {
-        auth.loginLimiter.fail(ip);
         ctx.activity.record({
           category: 'security',
           type: 'auth.remote_failed',
@@ -122,7 +136,6 @@ export function registerAuthRoutes(app: FastifyInstance, deps: RouteDeps): void 
         });
         throw new HttpError(401, 'invalid_passcode', 'The passcode is not correct.');
       }
-      auth.loginLimiter.succeed(ip);
       const remote = ctx.settings.get().remote;
       const ttlMs = remote.sessionTtlHours * 3_600_000;
       const { session, token } = auth.createSession({

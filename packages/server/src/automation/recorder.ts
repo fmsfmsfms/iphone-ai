@@ -3,7 +3,8 @@
 // step, preferring visible text labels over coordinates. A fresh OCR snapshot
 // is taken at start and shortly after each recorded action; a tap is only
 // labelled from a snapshot taken after the previous action (else it is kept
-// as a point, so a stale screen never produces a wrong label).
+// as a point, so a stale screen never produces a wrong label). Text typed on a
+// password / code screen is never stored: a checkpoint takes its place.
 
 import type { ScreenElement, WorkflowStep } from '@iphone-ai/shared';
 
@@ -174,8 +175,22 @@ export class WorkflowRecorder {
       case 'type_text': {
         const texts = (this.snapshot?.elements ?? []).map((e) => e.label);
         // Without any screen information we cannot tell, so treat the text as sensitive.
-        const sensitive = this.snapshot === null || screenHasAuthPrompt(texts) !== null || texts.some((t) => SECRET_FIELD.test(t));
-        return { id: this.nextId(), type: 'type_text', text: action.text, ...(sensitive ? { sensitive: true } : {}) };
+        const unknown = this.snapshot === null;
+        const sensitive = unknown || screenHasAuthPrompt(texts) !== null || texts.some((t) => SECRET_FIELD.test(t));
+        if (!sensitive) return { id: this.nextId(), type: 'type_text', text: action.text };
+        // The secret itself is not kept: during a run the user types it and approves the checkpoint.
+        this.addNote(
+          unknown
+            ? 'Typed text was not recorded because the screen could not be read to check for a password or code field; a checkpoint was added instead.'
+            : 'Typed text on a password or code field was not recorded; a checkpoint was added instead.',
+        );
+        return {
+          id: this.nextId(),
+          type: 'checkpoint',
+          message: unknown
+            ? 'Type the text yourself on the iPhone, then approve to continue.'
+            : 'Enter the password or code yourself on the iPhone, then approve to continue.',
+        };
       }
       case 'press_key':
         return { id: this.nextId(), type: 'press_key', key: formatKeyCombo(action.key, action.modifiers) };
@@ -197,6 +212,10 @@ export class WorkflowRecorder {
         this.notes.push('Opening a link was not recorded (Mirroir cannot open URLs on iPhone).');
         return null;
     }
+  }
+
+  private addNote(note: string): void {
+    if (!this.notes.includes(note)) this.notes.push(note);
   }
 
   /** The label of the element within 30 pt of the touch, if replaying that label would hit the same element. */

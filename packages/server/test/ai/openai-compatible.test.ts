@@ -224,6 +224,24 @@ describe('message conversion', () => {
     expect(messages[1]).toEqual({ role: 'user', content: [{ type: 'text', text: 'What is on screen?' }] });
   });
 
+  it('re-sends screenshots only for the newest three messages that carry them (history itself is untouched)', async () => {
+    endTurn();
+    const shot = (i: number) => ({ type: 'image' as const, mimeType: 'image/jpeg', data: `SHOT${i}` });
+    const long: TurnMessage[] = [{ role: 'user', content: [{ type: 'text', text: 'Start' }, shot(0)] }];
+    for (let i = 1; i <= 5; i += 1) {
+      long.push({ role: 'assistant', text: '', toolCalls: [{ id: `c${i}`, name: 'tap_element', args: { element: 'e1' } }] });
+      long.push({ role: 'tool_results', results: [{ callId: `c${i}`, name: 'tap_element', isError: false, content: [{ type: 'text', text: `after ${i}` }, shot(i)] }] });
+    }
+    const before = JSON.stringify(long);
+    await new OpenAiCompatibleProvider(config({ vision: true }), null).runTurn(request(long));
+    const body = JSON.stringify(server.requests[0]!.body);
+    expect(body.match(/"type":"image_url"/g)?.length).toBe(3);
+    for (const i of [3, 4, 5]) expect(body).toContain(`SHOT${i}`);
+    for (const i of [0, 1, 2]) expect(body).not.toContain(`SHOT${i}`);
+    expect(body).toContain('Earlier screenshot omitted');
+    expect(JSON.stringify(long)).toBe(before);
+  });
+
   it('replaces image-only user content with a placeholder for text-only models', async () => {
     endTurn();
     await new OpenAiCompatibleProvider(config({ vision: false }), null).runTurn(

@@ -1,6 +1,8 @@
 // Saved, repeatable phone workflows: storage (workflows / workflow_runs),
 // runs through the step engine (one at a time, holding the workflow control
 // lease), AI suggestions, SKILL.md export and the manual-action recorder.
+// Workflows returned to callers (the HTTP API, incl. view-only sessions) never
+// contain the text of sensitive type_text steps.
 
 import {
   workflowInputSchema,
@@ -10,6 +12,7 @@ import {
   type WorkflowInput,
   type WorkflowRun,
   type WorkflowRunStatus,
+  type WorkflowStep,
   type WorkflowSuggestion,
 } from '@iphone-ai/shared';
 
@@ -59,6 +62,9 @@ interface RunRow {
 
 const LIVE_STATUSES: readonly WorkflowRunStatus[] = ['running', 'paused', 'awaiting_approval'];
 
+/** Stands in for the text of sensitive type_text steps in returned workflows; sent back unchanged it keeps the stored text. */
+export const HIDDEN_TEXT = '••••••••';
+
 export class WorkflowService implements WorkflowServiceApi {
   private readonly log: Logger;
   private readonly timing: AutomationTiming;
@@ -76,10 +82,16 @@ export class WorkflowService implements WorkflowServiceApi {
   // ───────────────────────────── storage ─────────────────────────────
 
   list(): Workflow[] {
-    return this.deps.db.all<WorkflowRow>('SELECT * FROM workflows ORDER BY updated_at DESC').map(rowToWorkflow);
+    return this.deps.db.all<WorkflowRow>('SELECT * FROM workflows ORDER BY updated_at DESC').map(rowToWorkflow).map(hideSecrets);
   }
 
   get(id: string): Workflow | null {
+    const workflow = this.load(id);
+    return workflow ? hideSecrets(workflow) : null;
+  }
+
+  /** The stored workflow including sensitive text (internal use only: runs and export). */
+  private load(id: string): Workflow | null {
     const row = this.deps.db.get<WorkflowRow>('SELECT * FROM workflows WHERE id = ?', id);
     return row ? rowToWorkflow(row) : null;
   }
@@ -91,7 +103,7 @@ export class WorkflowService implements WorkflowServiceApi {
       id: newId('wf'),
       name: parsed.name,
       description: parsed.description,
-      steps: normalizeStepIds(parsed.steps),
+      steps: restoreHiddenText(normalizeStepIds(parsed.steps), []),
       createdAt: now,
       updatedAt: now,
       lastRunAt: null,
@@ -117,7 +129,7 @@ export class WorkflowService implements WorkflowServiceApi {
       summary: `Saved workflow “${workflow.name}” (${workflow.steps.length} ${workflow.steps.length === 1 ? 'step' : 'steps'})`,
       detail: { workflowId: workflow.id, source: workflow.source },
     });
-    return workflow;
+    return hideSecrets(workflow);
   }
 
   update(id: string, input: WorkflowInput): Workflow {
@@ -129,7 +141,7 @@ export class WorkflowService implements WorkflowServiceApi {
       ...existing,
       name: parsed.name,
       description: parsed.description,
-      steps: normalizeStepIds(parsed.steps),
+      steps: restoreHiddenText(normalizeStepIds(parsed.steps), existing.steps),
       source: sentSource ? parsed.source : existing.source,
       updatedAt: Date.now(),
     };
@@ -149,7 +161,7 @@ export class WorkflowService implements WorkflowServiceApi {
       summary: `Updated workflow “${workflow.name}”`,
       detail: { workflowId: id, steps: workflow.steps.length },
     });
-    return workflow;
+    return hideSecrets(workflow);
   }
 
   remove(id: string): void {
@@ -201,7 +213,7 @@ export class WorkflowService implements WorkflowServiceApi {
     if (this.execution && this.execution.runId === runId && !this.execution.isFinished) {
       throw new WorkflowError('This run is still in progress.', 'conflict');
     }
-    const workflow = this.get(previous.workflowId);
+    const workflow = this.load(previous.workflowId);
     if (!workflow) throw new WorkflowError('The workflow for this run no longer exists.', 'not_found', 404);
     let startIndex = 0;
     if (fromFailedStep) {
@@ -507,7 +519,7 @@ export class WorkflowService implements WorkflowServiceApi {
   // ───────────────────────────── internals ─────────────────────────────
 
   private requireWorkflow(id: string): Workflow {
-    const workflow = this.get(id);
+    const workflow = this.load(id);
     if (!workflow) throw new WorkflowError('Workflow not found.', 'not_found', 404);
     return workflow;
   }
@@ -604,6 +616,29 @@ function parseInput(input: WorkflowInput): WorkflowInput {
     throw new WorkflowError(`Invalid workflow: ${issue?.message ?? 'validation failed'}${where}`, 'invalid', 400);
   }
   return result.data;
+}
+
+function isHiddenStep(step: WorkflowStep): boolean {
+  return step.type === 'type_text' && step.sensitive === true;
+}
+
+/** A copy without the text of sensitive type_text steps (passwords / codes are never returned). */
+function hideSecrets(workflow: Workflow): Workflow {
+  if (!workflow.steps.some(isHiddenStep)) return workflow;
+  return { ...workflow, steps: workflow.steps.map((step) => (isHiddenStep(step) ? { ...step, text: HIDDEN_TEXT } : step)) };
+}
+
+/** Puts the stored text back into sensitive steps that were sent back with the HIDDEN_TEXT placeholder. */
+function restoreHiddenText(steps: WorkflowStep[], stored: readonly WorkflowStep[]): WorkflowStep[] {
+  return steps.map((step, index) => {
+    if (step.type !== 'type_text' || step.text !== HIDDEN_TEXT) return step;
+    const original = stored.find((s) => s.id === step.id);
+    if (!original || original.type !== 'type_text' || original.sensitive !== true) {
+      throw new WorkflowError(`Step ${index + 1} contains hidden text that can't be copied. Type the text again.`, 'invalid', 400);
+    }
+    // Hidden text stays hidden; it only becomes visible again by typing it anew.
+    return { ...step, text: original.text, sensitive: true };
+  });
 }
 
 function rowToWorkflow(row: WorkflowRow): Workflow {

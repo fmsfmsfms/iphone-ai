@@ -9,7 +9,8 @@ import { DEFAULT_PROVIDERS, providerConfigSchema, providerSecretSchema, type Pro
 import type { AppContext } from '../../core/services.js';
 import { providerSecretAccount } from '../../security/secrets.js';
 import { HttpError, notFound } from '../errors.js';
-import { actorFor, parseBody, requireControl, requireLocal, type RouteDeps } from '../guards.js';
+import { actorFor, parseBody, requireControl, requireLocal, requireSession, type RouteDeps } from '../guards.js';
+import { settingsForSession } from '../redaction.js';
 
 const DEFAULT_IDS = new Set(DEFAULT_PROVIDERS.map((p) => p.id));
 /** Path segments under /api/providers that cannot be provider ids. */
@@ -96,7 +97,7 @@ export function registerProviderRoutes(app: FastifyInstance, deps: RouteDeps): v
     return provider;
   };
 
-  app.get('/api/providers', async () => ctx.settings.get().ai.providers);
+  app.get('/api/providers', async (request) => settingsForSession(ctx.settings.get(), requireSession(request)).ai.providers);
 
   app.get('/api/providers/claude-code/status', async () => ctx.agents.claudeCodeStatus());
 

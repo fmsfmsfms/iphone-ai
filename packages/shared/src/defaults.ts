@@ -267,7 +267,7 @@ export function createDefaultSettings(): AppSettings {
     connection: {
       mirroirBinaryPath: DEFAULT_MIRROIR_BINARY,
       target: 'iphone',
-      requestTimeoutMs: 60000,
+      requestTimeoutMs: 30000,
       screenshot: {
         activeFps: 2,
         idleFps: 0.2,

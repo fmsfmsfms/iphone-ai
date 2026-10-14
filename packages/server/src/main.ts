@@ -185,6 +185,12 @@ async function main(): Promise<void> {
   }
 }
 
+// Safety net: a stray rejected promise must never take down the process that
+// owns the phone connection; it is logged instead.
+process.on('unhandledRejection', (reason) => {
+  process.stderr.write(`Unhandled rejection: ${reason instanceof Error ? reason.stack ?? reason.message : String(reason)}\n`);
+});
+
 main().catch((err: unknown) => {
   process.stderr.write(`Fatal: ${err instanceof Error ? err.stack ?? err.message : String(err)}\n`);
   process.exit(1);

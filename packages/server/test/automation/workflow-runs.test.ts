@@ -296,6 +296,8 @@ describe('workflow runs', () => {
   it('never writes sensitive typed text to the activity history or run results', async () => {
     h.settings.mutate((d) => {
       d.privacy.logTypedText = true;
+      // Sensitive steps are refused while this is on (see "passwords and codes").
+      d.permissions.blockTypingOnAuthScreens = false;
     });
     const id = workflow([
       { id: 'a', type: 'type_text', text: 'hunter2-secret', sensitive: true },
@@ -311,8 +313,10 @@ describe('workflow runs', () => {
     expect(history).toContain('«14 characters»');
     expect(history).toContain('hello world');
     expect(JSON.stringify(h.runEvents)).not.toContain('hunter2');
-    // The phone still receives the real text.
+    // The phone still receives the real text; the device log is told to hide it.
     expect(h.device.performed[0]!.action).toEqual({ kind: 'type_text', text: 'hunter2-secret' });
+    expect(h.device.performed[0]!.ctx.sensitive).toBe(true);
+    expect(h.device.performed[1]!.ctx.sensitive).toBeUndefined();
   });
 
   it('redacts all typed text from history unless logging typed text is enabled', async () => {
@@ -424,5 +428,155 @@ describe('workflow runs', () => {
     expect(run.error).toMatch(/limit is 1 steps per run/);
     expect(run.steps.every((s) => s.status === 'skipped')).toBe(true);
     expect(h.device.performed).toHaveLength(0);
+  });
+});
+
+describe('passwords and codes', () => {
+  it('refuses a sensitive type_text step (a stored password) and never types it', async () => {
+    h.settings.mutate((d) => {
+      d.permissions.controlMode = 'assisted';
+    });
+    const decisions = autoDecide(h, () => 'approved');
+    const id = workflow([
+      { id: 'a', type: 'press_home' },
+      { id: 'b', type: 'type_text', text: 'hunter2', sensitive: true },
+    ]);
+    const run = await runToEnd(id);
+    decisions.unsubscribe();
+
+    expect(run.status).toBe('failed');
+    expect(run.steps.map((s) => s.status)).toEqual(['succeeded', 'failed']);
+    expect(run.steps[1]!.message).toBe('This step types a password or code. Enter it yourself on the iPhone (replace the step with a checkpoint).');
+    // Denied outright: not even offered as an approval.
+    expect(decisions.requests.map((r) => r.action.tool)).toEqual(['press_home']);
+    expect(h.device.performed.map((p) => p.action.kind)).toEqual(['press_home']);
+    expect(JSON.stringify(h.runEvents)).not.toContain('hunter2');
+  });
+
+  it('refuses typing on a screen with a password or code field, like the AI path', async () => {
+    h.device.screens.login = [
+      { label: 'Sign In', x: 205, y: 100 },
+      { label: 'Email', x: 205, y: 250 },
+      { label: 'Password', x: 205, y: 320 },
+      { label: 'Forgot password?', x: 205, y: 420 },
+    ];
+    h.device.screens.otp = [
+      { label: 'Enter the 6-digit code we sent to +1 555 0100', x: 205, y: 150 },
+      { label: 'Code', x: 205, y: 300 },
+      { label: 'Resend', x: 205, y: 400 },
+    ];
+
+    h.device.current = 'login';
+    const login = await runToEnd(workflow([{ id: 'a', type: 'type_text', text: 'hunter2' }], 'Log in'));
+    expect(login.status).toBe('failed');
+    expect(login.steps[0]!.message).toMatch(/^Not allowed: .*Typing into "Password" looks like entering a secret/);
+
+    h.device.current = 'otp';
+    const otp = await runToEnd(workflow([{ id: 'a', type: 'type_text', text: '483920' }], 'Enter code'));
+    expect(otp.status).toBe('failed');
+    expect(otp.steps[0]!.message).toMatch(/^Not allowed: .*Typing into "Code" looks like entering a secret/);
+
+    expect(h.device.performed).toHaveLength(0);
+  });
+
+  it('refuses typing into a secret field the workflow tapped just before', async () => {
+    // "Wi-Fi Password" is not a bare field label, so only the tapped field reveals it.
+    h.device.screens.wifi = [
+      { label: 'Join Network', x: 205, y: 100 },
+      { label: 'Wi-Fi Password', x: 205, y: 300 },
+      { label: 'Join', x: 350, y: 100 },
+    ];
+    h.device.current = 'wifi';
+    const decisions = autoDecide(h, () => 'approved');
+    const run = await runToEnd(
+      workflow([
+        { id: 'a', type: 'tap_text', label: 'Wi-Fi Password' },
+        { id: 'b', type: 'type_text', text: 'letmein' },
+      ]),
+    );
+    decisions.unsubscribe();
+
+    expect(run.status).toBe('failed');
+    expect(run.steps.map((s) => s.status)).toEqual(['succeeded', 'failed']);
+    expect(run.steps[1]!.message).toMatch(/^Not allowed: .*Typing into "Wi-Fi Password" looks like entering a secret/);
+    expect(h.device.performed.map((p) => p.action.kind)).toEqual(['tap']);
+  });
+
+  it('never types a value read from a code screen', async () => {
+    h.device.screens.sms = [
+      { label: 'Messages', x: 205, y: 60 },
+      { label: 'Your verification code is 483920', x: 205, y: 300 },
+    ];
+    h.device.current = 'sms';
+    const decisions = autoDecide(h, () => 'approved');
+    const run = await runToEnd(
+      workflow([
+        { id: 'a', type: 'read_screen', saveAs: 'otp' },
+        { id: 'b', type: 'launch_app', app: 'Settings' },
+        { id: 'c', type: 'type_text', text: 'Code: {otp}' },
+      ]),
+    );
+    decisions.unsubscribe();
+
+    expect(run.steps[0]!.output).not.toContain('483920');
+    expect(run.status).toBe('failed');
+    expect(run.steps[2]!.message).toBe(
+      '{otp} looks like a password or code read from the screen, so it is not typed. Enter it yourself on the iPhone (replace the step with a checkpoint).',
+    );
+    expect(h.device.performed.map((p) => p.action.kind)).toEqual(['launch_app']);
+    expect(JSON.stringify(h.runEvents)).not.toContain('483920');
+  });
+});
+
+describe('pause and stop while an action is queued', () => {
+  it('passes the run signal to every device action, so a stop drops a queued action', async () => {
+    const seen: (AbortSignal | undefined)[] = [];
+    h.device.whileQueued = (_action, ctx) => {
+      seen.push(ctx.signal);
+      h.service.stop(h.service.activeRun()!.id, 'Stopped by the user.');
+    };
+    const started = await h.service.run(workflow([{ id: 'a', type: 'press_home' }]), 'user');
+    const run = await h.service.waitForRun(started.id);
+
+    expect(seen[0]).toBeInstanceOf(AbortSignal);
+    expect(run.status).toBe('stopped');
+    expect(run.error).toBe('Stopped by the user.');
+    expect(h.device.performed).toHaveLength(0);
+    expect(h.device.currentLease).toBeNull();
+  });
+
+  it('waits for resume and retries the step when a pause refuses its queued action', async () => {
+    let pausedWhileQueued = false;
+    h.device.whileQueued = (action) => {
+      if (action.kind === 'tap' && !pausedWhileQueued) {
+        pausedWhileQueued = true;
+        h.service.pause(h.service.activeRun()!.id);
+      }
+    };
+    const id = workflow([
+      { id: 'a', type: 'launch_app', app: 'Settings' },
+      { id: 'b', type: 'tap_text', label: 'General' },
+      { id: 'c', type: 'assert_text', label: 'About', present: true },
+    ]);
+    const started = await h.service.run(id, 'user');
+    await waitUntil(() => pausedWhileQueued);
+    await new Promise((resolve) => setTimeout(resolve, 100));
+
+    // The refused tap was not executed and the run waits, paused.
+    expect(h.service.getRun(started.id)!.status).toBe('paused');
+    expect(h.service.getRun(started.id)!.steps[1]!.status).toBe('running');
+    expect(h.device.performed.map((p) => p.action.kind)).toEqual(['launch_app']);
+
+    h.service.resume(started.id);
+    const run = await h.service.waitForRun(started.id);
+
+    expect(run.status).toBe('succeeded');
+    expect(run.steps.map((s) => s.status)).toEqual(['succeeded', 'succeeded', 'succeeded']);
+    expect(run.steps[1]!.message).toBe('Tapped “General”');
+    expect(h.device.performed.map((p) => p.action)).toEqual([
+      { kind: 'launch_app', name: 'Settings' },
+      { kind: 'tap', x: 205, y: 340 },
+    ]);
+    expect(h.device.leasePausedHistory).toEqual([true, false]);
   });
 });

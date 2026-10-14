@@ -4,7 +4,8 @@ import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 
 import { HttpError } from '../errors.js';
-import { actorFor, parseBody, requireControl, requireLocal, type RouteDeps } from '../guards.js';
+import { actorFor, parseBody, requireControl, requireLocal, requireSession, type RouteDeps } from '../guards.js';
+import { settingsForSession } from '../redaction.js';
 import { applySettingsPatch, parseSettingsPatch, recordSettingsChange } from '../settings-apply.js';
 import { dropProviderSecrets, reconcileProviders } from './providers.js';
 
@@ -23,7 +24,7 @@ const privacyDeleteSchema = z
 export function registerSettingsRoutes(app: FastifyInstance, deps: RouteDeps): void {
   const { ctx, auth } = deps;
 
-  app.get('/api/settings', async () => ctx.settings.get());
+  app.get('/api/settings', async (request) => settingsForSession(ctx.settings.get(), requireSession(request)));
 
   app.put('/api/settings', async (request) => {
     const session = requireControl(request, auth);
@@ -54,7 +55,7 @@ export function registerSettingsRoutes(app: FastifyInstance, deps: RouteDeps): v
     const next = applySettingsPatch(ctx, patch);
     if (removed.length) await dropProviderSecrets(ctx, removed);
     recordSettingsChange(ctx, previous, next, actorFor(session), sections);
-    return next;
+    return settingsForSession(next, session);
   });
 
   app.post('/api/privacy/delete', async (request) => {

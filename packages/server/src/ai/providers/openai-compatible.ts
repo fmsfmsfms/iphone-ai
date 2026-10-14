@@ -113,9 +113,12 @@ export class OpenAiCompatibleProvider implements TurnProvider {
 
   private toMessages(system: string, history: TurnMessage[]): ChatMessage[] {
     const out: ChatMessage[] = [{ role: 'system', content: system }];
-    for (const m of history) {
+    // Only the newest screenshots are re-sent (per request; the stored history is unchanged).
+    const keepImages = this.config.vision ? recentImageMessages(history, KEEP_IMAGE_MESSAGES) : null;
+    for (const [index, m] of history.entries()) {
+      const withImages = keepImages === null || keepImages.has(index);
       if (m.role === 'user') {
-        out.push({ role: 'user', content: this.parts(m.content) });
+        out.push({ role: 'user', content: this.parts(withImages ? m.content : withoutImages(m.content)) });
       } else if (m.role === 'assistant') {
         out.push({
           role: 'assistant',
@@ -134,13 +137,14 @@ export class OpenAiCompatibleProvider implements TurnProvider {
         // Tool messages are text-only in Chat Completions; images go in a follow-up user message.
         const images: ModelContent[] = [];
         for (const r of m.results) {
-          const textParts = r.content.filter((c): c is { type: 'text'; text: string } => c.type === 'text').map((c) => c.text);
+          const content = withImages ? r.content : withoutImages(r.content);
+          const textParts = content.filter((c): c is { type: 'text'; text: string } => c.type === 'text').map((c) => c.text);
           out.push({
             role: 'tool',
             tool_call_id: r.callId,
             content: `${r.isError ? 'ERROR: ' : ''}${textParts.join('\n') || '(no output)'}`,
           });
-          images.push(...r.content.filter((c) => c.type === 'image'));
+          images.push(...content.filter((c) => c.type === 'image'));
         }
         if (images.length && this.config.vision) {
           out.push({
@@ -220,6 +224,29 @@ export class OpenAiCompatibleProvider implements TurnProvider {
     for await (const m of this.client.models.list({ signal })) models.push(m.id);
     return models;
   }
+}
+
+/** Screenshots are re-sent only for the newest few messages that carry them (request size stays bounded). */
+const KEEP_IMAGE_MESSAGES = 3;
+const OMITTED_IMAGE: ModelContent = { type: 'text', text: '(Earlier screenshot omitted; only the latest screenshots are sent.)' };
+
+function hasImages(m: TurnMessage): boolean {
+  if (m.role === 'user') return m.content.some((c) => c.type === 'image');
+  if (m.role === 'tool_results') return m.results.some((r) => r.content.some((c) => c.type === 'image'));
+  return false;
+}
+
+function recentImageMessages(history: readonly TurnMessage[], keep: number): Set<number> {
+  const out = new Set<number>();
+  for (let i = history.length - 1; i >= 0 && out.size < keep; i -= 1) {
+    if (hasImages(history[i]!)) out.add(i);
+  }
+  return out;
+}
+
+function withoutImages(content: ModelContent[]): ModelContent[] {
+  if (!content.some((c) => c.type === 'image')) return content;
+  return [...content.filter((c) => c.type !== 'image'), OMITTED_IMAGE];
 }
 
 function parseCall(c: { id: string; name: string; args: string }, index: number): ToolCall {

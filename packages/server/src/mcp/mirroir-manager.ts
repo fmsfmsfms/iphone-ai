@@ -55,6 +55,8 @@ export class McpTimeoutError extends Error {
 const CLIENT_INFO = { name: 'iphone-ai', version: '0.1.0' };
 const MAX_LINE_BYTES = 64 * 1024 * 1024;
 const STDERR_RING = 300;
+/** An instance that stayed up this long resets the crash backoff. */
+const STABLE_UPTIME_MS = 60_000;
 
 export interface MirroirManagerOptions {
   paths: AppPaths;
@@ -82,6 +84,7 @@ export class MirroirManager extends EventEmitter {
   private intentionalClose = false;
   private restartTimer: NodeJS.Timeout | null = null;
   private startPromise: Promise<void> | null = null;
+  private restartPromise: Promise<void> | null = null;
   private configFingerprint: string | null = null;
   private readonly log: Logger;
 
@@ -156,7 +159,16 @@ export class MirroirManager extends EventEmitter {
       return;
     }
     this.setState(this.restartCount > 0 ? 'restarting' : 'starting');
-    this.configFingerprint = writeMirroirWorkspace(this.opts.paths, this.opts.settings.get());
+    try {
+      this.configFingerprint = writeMirroirWorkspace(this.opts.paths, this.opts.settings.get());
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      this.log.error('Could not write the Mirroir workspace', { error: message });
+      this.consecutiveCrashes += 1;
+      this.setState('crashed', `Could not write the Mirroir workspace: ${message}`);
+      this.scheduleRestart();
+      return;
+    }
 
     const transport = new StdioClientTransport({
       command: binary,
@@ -199,6 +211,9 @@ export class MirroirManager extends EventEmitter {
       }
       this.client = null;
       this.transport = null;
+      // handleClose ignores a transport that never finished connecting, so
+      // the backoff must grow here (a binary that dies at startup).
+      this.consecutiveCrashes += 1;
       this.setState('crashed');
       this.scheduleRestart();
       return;
@@ -226,8 +241,13 @@ export class MirroirManager extends EventEmitter {
       this.tools = [];
       this.log.warn('tools/list failed', { error: err instanceof Error ? err.message : String(err) });
     }
+    // The process exited (handleClose already marked it crashed and scheduled
+    // a restart), or stop()/terminate() ran, while tools/list was pending.
+    if (this.client !== client) return;
 
-    this.consecutiveCrashes = 0;
+    // consecutiveCrashes is NOT reset here: it decays in handleClose once an
+    // instance has stayed up, so a binary that crashes right after every
+    // start keeps backing off.
     this.lastError = null;
     this.setState('ready');
     this.log.info('Mirroir MCP server ready', { pid: this.pid, version: this.version, tools: this.tools.length });
@@ -258,7 +278,8 @@ export class MirroirManager extends EventEmitter {
       this.setState('stopped');
       return;
     }
-    this.consecutiveCrashes += 1;
+    const uptime = this.startedAt ? Date.now() - this.startedAt : 0;
+    this.consecutiveCrashes = uptime >= STABLE_UPTIME_MS ? 1 : this.consecutiveCrashes + 1;
     const tail = this.stderrLines.slice(-3).join(' | ');
     this.setState('crashed', `Mirroir MCP server exited unexpectedly${tail ? `: ${tail}` : ''}`);
     this.log.warn('Mirroir MCP server exited unexpectedly');
@@ -279,7 +300,7 @@ export class MirroirManager extends EventEmitter {
     this.restartTimer = setTimeout(() => {
       this.restartTimer = null;
       this.restartCount += 1;
-      void this.start();
+      void this.start().catch((err: unknown) => this.log.error('Mirroir restart failed', { error: String(err) }));
     }, delay);
     this.restartTimer.unref();
   }
@@ -295,12 +316,17 @@ export class MirroirManager extends EventEmitter {
       this.setState('stopped');
       return;
     }
+    const client = this.client;
     this.intentionalClose = true;
     try {
-      await this.client?.close();
+      await client?.close();
     } catch {
       // ignore
     }
+    // Another lifecycle call (emergency terminate()+start(), a call-timeout
+    // restart) may have started a newer instance while we waited for this one
+    // to exit: leave it alone instead of orphaning it.
+    if (this.transport !== transport && this.transport !== null) return;
     this.client = null;
     this.transport = null;
     this.pid = null;
@@ -332,6 +358,8 @@ export class MirroirManager extends EventEmitter {
         // ignore
       }
     }
+    // A newer instance started while we waited: do not detach it.
+    if (this.transport !== transport && this.transport !== null) return;
     this.client = null;
     this.transport = null;
     this.pid = null;
@@ -339,11 +367,22 @@ export class MirroirManager extends EventEmitter {
     this.setState('stopped', reason);
   }
 
-  async restart(reason: string): Promise<void> {
-    this.log.info('Restarting Mirroir MCP server', { reason });
-    await this.stop();
-    this.restartCount += 1;
-    await this.start();
+  /** Concurrent calls join the restart already in progress (no second instance). */
+  restart(reason: string): Promise<void> {
+    if (this.restartPromise) return this.restartPromise;
+    this.restartPromise = (async () => {
+      this.log.info('Restarting Mirroir MCP server', { reason });
+      // Let a start that is still connecting settle first, so it cannot come
+      // up after our stop() and be mistaken for the restarted instance.
+      if (this.startPromise) await this.startPromise.catch(() => undefined);
+      await this.stop();
+      this.consecutiveCrashes = 0;
+      this.restartCount += 1;
+      await this.start();
+    })().finally(() => {
+      this.restartPromise = null;
+    });
+    return this.restartPromise;
   }
 
   /** True when the workspace config on disk would differ from the one the running server loaded. */
@@ -387,7 +426,7 @@ export class MirroirManager extends EventEmitter {
         this.log.error('Mirroir tool call timed out; restarting server', { tool: name, timeoutMs });
         await this.terminate(`"${name}" timed out`);
         this.restartCount += 1;
-        void this.start();
+        void this.start().catch((e: unknown) => this.log.error('Mirroir restart failed', { error: String(e) }));
         throw new McpTimeoutError(name, timeoutMs);
       }
       if (!this.client) throw new McpUnavailableError(`Mirroir connection lost during "${name}"`);

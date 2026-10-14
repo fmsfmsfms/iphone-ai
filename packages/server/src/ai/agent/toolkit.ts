@@ -17,6 +17,7 @@ import {
   type AgentStep,
   type ControlMode,
   type DeviceAction,
+  type PolicyDecision,
   type ScreenDescription,
   type ScreenElement,
   type SwipeDirection,
@@ -24,11 +25,14 @@ import {
 
 import type { ActivityLog } from '../../core/activity-log.js';
 import type { SettingsStore } from '../../core/settings-store.js';
-import { describeTypedText, redactToolArgs } from '../../core/redact.js';
+import { describeTypedText, redactSecrets, redactToolArgs } from '../../core/redact.js';
 import { DeviceError, describeAction, type DeviceController } from '../../device/device-controller.js';
 import { matchElement } from '../../device/element-matcher.js';
-import { evaluatePolicy } from '../../policy/engine.js';
+import { evaluatePolicy, normalizeText, screenHasAuthPrompt, type BlockedForeground, type PolicyTarget } from '../../policy/engine.js';
+import { detectBlockedForeground } from '../../policy/foreground.js';
+import { labelsAtPoint } from '../../policy/target.js';
 import type { ApprovalBroker } from '../../policy/approvals.js';
+import { downscaleForModel } from '../image.js';
 import type { ScreenshotStore } from '../screenshots.js';
 import type { ExecutableTool, ModelContent, ModelToolDef, ToolCall } from '../types.js';
 
@@ -77,6 +81,10 @@ export interface ToolkitTask {
   /** Resolves when the task is not paused (immediately if running). */
   waitIfPaused(): Promise<void>;
   onActionsUsed(count: number): void;
+  /** Device-wide "typed but not sent" state (drafts typed by an earlier task, a workflow step or the user). */
+  uncommittedTyping?: () => boolean;
+  /** Screenshots sent to the model per task before observations become text-only (default 30). */
+  maxImages?: number;
 }
 
 interface Observation {
@@ -84,7 +92,21 @@ interface Observation {
   byId: Map<string, ScreenElement>;
   screenshotId: string | null;
   afterAction: number;
+  /** A blocked app that appears to be in front on this screen. */
+  foreground: BlockedForeground | null;
 }
+
+/** How a device action's target was chosen (re-resolved against a fresh screen after an approval wait). */
+type TargetRef =
+  | { kind: 'element'; label: string | null }
+  | { kind: 'point' }
+  | { kind: 'none' };
+
+type ToolOutput = { content: ModelContent[]; isError: boolean };
+
+/** Screenshots per task sent to the model; later observations are text only (history is never edited). */
+export const MAX_IMAGES_PER_TASK = 30;
+const ALREADY_FINISHED = 'The task already finished (finish_task was called). No more tools can run; reply with one short sentence for the user.';
 
 const reason = z.string().max(300).describe('One short sentence: why this action moves the task forward.');
 const target = {
@@ -103,7 +125,10 @@ const SHAPES = {
     distance: z.enum(['short', 'medium', 'long']).optional(),
     reason,
   },
-  type_text: { text: z.string().min(1).max(500).describe('Text to type into the focused field.'), reason },
+  type_text: {
+    text: z.string().min(1).max(500).describe('Text to type into the focused field. No line breaks: to submit, call press_key "return" afterwards.'),
+    reason,
+  },
   press_key: { key: z.enum(['return', 'escape', 'tab', 'delete', 'space', 'up', 'down', 'left', 'right']), reason },
   go_home: { reason },
   go_back: { reason },
@@ -134,7 +159,8 @@ const DESCRIPTIONS: Record<ToolName, string> = {
   double_tap: 'Double-tap an element or point (e.g. to zoom or select a word).',
   long_press: 'Press and hold an element or point (context menus, Quick Actions).',
   swipe: 'Swipe across the middle of the screen. "up" moves the finger up (scrolls down the page). Use for scrolling and paging.',
-  type_text: 'Type text into the currently focused text field (tap the field first). Never use for passwords, passcodes or codes.',
+  type_text:
+    'Type text into the currently focused text field (tap the field first). Never use for passwords, passcodes or codes. Do not include line breaks; use press_key "return" to submit.',
   press_key: 'Press a key: return (submit/search), delete (backspace), escape, tab, space or arrows.',
   go_home: 'Go to the Home Screen.',
   go_back: 'Go back (taps the "<" back button at the top-left, or its usual position).',
@@ -166,6 +192,8 @@ export class AgentToolkit {
   private actionsUsed = 0;
   private finished: FinishResult | null = null;
   private pendingTypedText = false;
+  private imagesSent = 0;
+  private lastForeground: string | null = null;
   private readonly attempts = new Map<string, number>();
   private unchangedStreak = 0;
   private loopRefusals = 0;
@@ -222,7 +250,9 @@ export class AgentToolkit {
     return this.run(call.name as ToolName, call.args);
   }
 
-  private async run(name: ToolName, rawArgs: Record<string, unknown>): Promise<{ content: ModelContent[]; isError: boolean }> {
+  private async run(name: ToolName, rawArgs: Record<string, unknown>): Promise<ToolOutput> {
+    // Every provider path (native loop and Claude Agent SDK) ends here: nothing runs after finish_task.
+    if (this.finished) return errorResult(ALREADY_FINISHED);
     const parsed = z.object(SHAPES[name]).safeParse(rawArgs ?? {});
     if (!parsed.success) {
       return errorResult(`Invalid arguments for ${name}: ${parsed.error.issues.map((i) => `${i.path.join('.') || 'args'}: ${i.message}`).join('; ')}`);
@@ -231,6 +261,7 @@ export class AgentToolkit {
     this.assertActive();
     await this.task.waitIfPaused();
     this.assertActive();
+    if (this.finished) return errorResult(ALREADY_FINISHED);
     try {
       switch (name) {
         case 'observe_screen':
@@ -245,6 +276,7 @@ export class AgentToolkit {
     } catch (err) {
       if (err instanceof TaskAbortedError) throw err;
       if (err instanceof DeviceError && (err.code === 'stop_latched' || err.code === 'aborted')) {
+        this.assertActive();
         throw new TaskAbortedError(err.message, 'stopped');
       }
       const message = err instanceof Error ? err.message : String(err);
@@ -263,37 +295,64 @@ export class AgentToolkit {
 
   // ───────────────────────────── observation ─────────────────────────────
 
-  /** Takes a fresh observation and returns it formatted for the model. */
-  async observe(options: { settle?: boolean; title?: string } = {}): Promise<{ content: ModelContent[]; observation: Observation }> {
+  /**
+   * Takes a fresh observation and returns it formatted for the model.
+   * `image: false` skips the screenshot (a quick re-check; text only).
+   */
+  async observe(options: { settle?: boolean; title?: string; image?: boolean } = {}): Promise<{ content: ModelContent[]; observation: Observation }> {
     this.task.setActivity('Looking at the screen');
-    const description = await this.deps.device.describe({ includeImage: true, settleFirst: options.settle === true });
+    const withImage = options.image !== false;
+    const description = await this.deps.device.describe({ includeImage: withImage, settleFirst: options.settle === true });
+    // describe_screen can take a while; a cancel during it must not be lost.
+    this.assertActive();
     const screenshotId = description.imageBase64
       ? this.deps.screenshots.put(description.imageBase64, description.imageMimeType ?? 'image/png', {
           taskId: this.task.taskId,
           workflowRunId: this.task.workflowRunId ?? null,
         })
       : null;
+    // Only tasks that can act need the warning (Observe Only tasks cannot touch anything).
+    const foreground = this.task.leaseId
+      ? detectBlockedForeground(
+          description.elements,
+          description.geometry?.heightPt ?? this.deps.device.geometry?.heightPt ?? null,
+          this.deps.settings.get().permissions.blockedApps,
+        )
+      : null;
     const observation: Observation = {
       description,
       byId: new Map(description.elements.map((e) => [e.id, e])),
       screenshotId,
       afterAction: this.actionsUsed,
+      foreground,
     };
     this.observation = observation;
     const text = formatObservation(description);
     const content: ModelContent[] = [{ type: 'text', text }];
-    if (description.imageBase64) {
+    if (foreground) content.push({ type: 'text', text: foregroundNotice(foreground) });
+    if (withImage && description.imageBase64) {
+      const mimeType = description.imageMimeType ?? 'image/png';
       if (this.task.vision) {
-        content.push({ type: 'image', mimeType: description.imageMimeType ?? 'image/png', data: description.imageBase64 });
+        const limit = this.task.maxImages ?? MAX_IMAGES_PER_TASK;
+        // Decided now, for this observation only: earlier history is never edited.
+        if (this.imagesSent < limit) {
+          const image = await this.forModel(description.imageBase64, mimeType);
+          content.push({ type: 'image', mimeType: image.mimeType, data: image.data });
+          this.imagesSent += 1;
+        } else {
+          content.push({ type: 'text', text: `(No screenshot attached: this task already sent ${limit} screenshots. Rely on the text elements above.)` });
+        }
       } else if (this.task.describeImage) {
         try {
-          const summary = await this.task.describeImage(description.imageBase64, description.imageMimeType ?? 'image/png', this.task.signal);
+          const image = await this.forModel(description.imageBase64, mimeType);
+          const summary = await this.task.describeImage(image.data, image.mimeType, this.task.signal);
           if (summary.trim()) content.push({ type: 'text', text: `Visual summary from the vision model:\n${summary.trim()}` });
         } catch {
           // The OCR text is still available.
         }
       }
     }
+    this.recordForeground(foreground, screenshotId);
     this.task.addStep({
       type: 'observe',
       title: options.title ?? 'Observed the screen',
@@ -303,6 +362,36 @@ export class AgentToolkit {
     });
     this.task.setActivity(null);
     return { content, observation };
+  }
+
+  /** Downscaled JPEG copy for the model (the stored step screenshot keeps full resolution). */
+  private async forModel(data: string, mimeType: string): Promise<{ data: string; mimeType: string }> {
+    if (mimeType !== 'image/png') return { data, mimeType };
+    const image = await downscaleForModel(data);
+    return { data: image.data, mimeType: image.mimeType };
+  }
+
+  /** Records (once per change) that a blocked app appears to be in front. */
+  private recordForeground(foreground: BlockedForeground | null, screenshotId: string | null): void {
+    const key = foreground ? `${foreground.where}:${foreground.app}` : null;
+    if (key === this.lastForeground) return;
+    this.lastForeground = key;
+    if (!foreground) return;
+    const what =
+      foreground.where === 'top_hit'
+        ? `Spotlight's top hit “${foreground.label}” is a blocked app (${foreground.app}).`
+        : `A blocked app (${foreground.app}) appears to be open (“${foreground.label}”). AI actions in it need your approval.`;
+    this.task.addStep({ type: 'policy', title: 'Blocked app on screen', detail: what, tool: null, screenshotId });
+    this.deps.activity.record({
+      category: 'policy',
+      type: 'policy.blocked_app_on_screen',
+      actor: 'ai',
+      severity: 'warning',
+      summary: what,
+      taskId: this.task.taskId,
+      workflowRunId: this.task.workflowRunId ?? null,
+      detail: { app: foreground.app, label: foreground.label, where: foreground.where },
+    });
   }
 
   private async observeTool(): Promise<{ content: ModelContent[]; isError: boolean }> {
@@ -332,7 +421,8 @@ export class AgentToolkit {
       if (!observation || observation.afterAction !== this.actionsUsed || Date.now() - observation.description.capturedAt > 5000) {
         try {
           observation = (await this.observe({ title: 'Final check of the screen' })).observation;
-        } catch {
+        } catch (err) {
+          if (err instanceof TaskAbortedError) throw err;
           observation = this.observation;
         }
       }
@@ -369,7 +459,7 @@ export class AgentToolkit {
 
   // ───────────────────────────── actions ─────────────────────────────
 
-  private async actTool(name: ToolName, args: Record<string, unknown>): Promise<{ content: ModelContent[]; isError: boolean }> {
+  private async actTool(name: ToolName, args: Record<string, unknown>): Promise<ToolOutput> {
     if (!this.task.leaseId) {
       return errorResult('Observe Only mode: you cannot interact with the iPhone. Describe what you see or what you would do, then call finish_task.');
     }
@@ -382,13 +472,13 @@ export class AgentToolkit {
 
     // Resolve the target and build the device action.
     let action: DeviceAction;
-    let targetLabel: string | null = null;
+    let ref: TargetRef = { kind: 'none' };
     let targetDescription = '';
     const pointer = name === 'tap' || name === 'double_tap' || name === 'long_press';
     if (pointer) {
       const resolved = this.resolveTarget(args, observation);
       if ('error' in resolved) return errorResult(resolved.error);
-      targetLabel = resolved.label;
+      ref = resolved.ref;
       targetDescription = resolved.description;
       action =
         name === 'tap'
@@ -402,7 +492,6 @@ export class AgentToolkit {
       targetDescription = `${String(args.direction)} (${String(args.distance ?? 'medium')})`;
     } else if (name === 'type_text') {
       action = { kind: 'type_text', text: String(args.text) };
-      targetLabel = focusedFieldGuess(observation.description.elements);
     } else if (name === 'press_key') {
       action = { kind: 'press_key', key: String(args.key) };
     } else if (name === 'go_home') {
@@ -411,7 +500,6 @@ export class AgentToolkit {
       action = { kind: 'press_back' };
     } else if (name === 'open_app') {
       action = { kind: 'launch_app', name: String(args.name) };
-      targetLabel = String(args.name);
     } else if (name === 'scroll_to_text') {
       const direction = (args.direction as 'up' | 'down' | undefined) ?? 'up';
       action = { kind: 'scroll_to', label: String(args.text), direction, maxScrolls: 10 };
@@ -439,46 +527,14 @@ export class AgentToolkit {
 
     // Policy (live settings: the user may have changed mode during the task).
     const settings = this.deps.settings.get();
-    const decision = evaluatePolicy({
-      actor: 'ai',
-      action,
-      mode: settings.permissions.controlMode,
-      permissions: settings.permissions,
-      stopLatched: this.deps.device.isStopLatched,
-      target: { label: targetLabel },
-      context: {
-        pendingTypedText: this.pendingTypedText,
-        screenTexts: observation.description.elements.map((e) => e.label).filter(Boolean),
-      },
-    });
+    let decision = this.decide(action, this.policyTarget(action, ref, observation), observation);
     const summary = `${humanAction(action, settings.privacy.logTypedText)}${targetDescription ? ` — ${targetDescription}` : ''}`;
     const displayArgs = redactToolArgs(action.kind, stripKind(action), { keepTypedText: settings.privacy.logTypedText });
 
-    if (decision.verdict === 'deny') {
-      this.task.addStep({
-        type: 'policy',
-        title: `Blocked: ${summary}`,
-        detail: decision.reasons.join('\n'),
-        tool: { name: action.kind, args: displayArgs, ok: false, result: 'Blocked by policy', durationMs: null },
-        screenshotId: null,
-      });
-      this.deps.activity.record({
-        category: 'policy',
-        type: 'policy.denied',
-        actor: 'ai',
-        severity: 'warning',
-        summary: `Blocked AI action: ${summary}`,
-        taskId: this.task.taskId,
-        workflowRunId: this.task.workflowRunId ?? null,
-        tool: action.kind,
-        detail: { reasons: decision.reasons, rules: decision.rules, args: displayArgs },
-      });
-      return errorResult(
-        `BLOCKED by iPhone AI's safety policy: ${decision.reasons.join(' ')} Do not try to reach the same result another way. Tell the user and call finish_task (status "needs_user" or "failed").`,
-      );
-    }
+    if (decision.verdict === 'deny') return this.blocked(action, summary, displayArgs, decision);
 
     let approvalId: string | null = null;
+    let current = observation;
     if (decision.verdict === 'require_approval') {
       this.task.setAwaitingApproval(true);
       this.task.setActivity(`Waiting for your approval: ${summary}`);
@@ -495,6 +551,7 @@ export class AgentToolkit {
           reasons: decision.reasons,
           frameSeq: this.deps.device.getLatestFrame()?.meta.seq ?? null,
           timeoutSec: settings.permissions.approvalTimeoutSec,
+          preview: action.kind === 'type_text' ? typingPreview(action.text, targetDescription, decision, observation) : null,
           onCreated: (id) => {
             requestId = id;
           },
@@ -519,27 +576,40 @@ export class AgentToolkit {
         );
       }
       approvalId = requestId;
+      // The user approved what they saw. Wait out a pause, then make sure the
+      // screen, the target and the policy (mode, rules) still match before acting.
+      await this.task.waitIfPaused();
+      this.assertActive();
+      const recheck = await this.recheckAfterApproval(action, ref, observation, decision, summary, displayArgs);
+      if ('refused' in recheck) return recheck.refused;
       // The user saw and approved what was typed; a subsequent commit is intentional.
       if (decision.rules.includes('commit.after_typing')) this.pendingTypedText = false;
+      decision = recheck.decision;
+      current = recheck.observation;
     }
 
     // Execute.
     this.task.setActivity(summary);
-    const fingerprintBefore = observation.description.fingerprint;
+    const fingerprintBefore = current.description.fingerprint;
+    const geometryNow = current.description.geometry ?? this.deps.device.geometry;
     let result: ActionResult;
     const started = Date.now();
     try {
       result = await this.deps.device.perform(action, {
         actor: 'ai',
         leaseId: this.task.leaseId,
-        geometryId: geometry?.geometryId ?? null,
+        geometryId: geometryNow?.geometryId ?? null,
         taskId: this.task.taskId,
         workflowRunId: this.task.workflowRunId ?? null,
         decision,
         approvalId,
+        signal: this.task.signal,
       });
     } catch (err) {
-      if (err instanceof DeviceError && (err.code === 'stop_latched' || err.code === 'aborted')) throw new TaskAbortedError(err.message, 'stopped');
+      if (err instanceof DeviceError && (err.code === 'stop_latched' || err.code === 'aborted')) {
+        this.assertActive();
+        throw new TaskAbortedError(err.message, 'stopped');
+      }
       const message = err instanceof Error ? err.message : String(err);
       this.task.addStep({
         type: 'tool_call',
@@ -548,6 +618,11 @@ export class AgentToolkit {
         tool: { name: action.kind, args: displayArgs, ok: false, result: message, durationMs: Date.now() - started },
         screenshotId: null,
       });
+      if (err instanceof DeviceError && err.code === 'lease_paused') {
+        // Not a stop: the next tool call waits at the pause gate. The user may change the screen meanwhile.
+        this.observation = null;
+        return errorResult('The task was paused before this action ran; it was NOT executed. When the task resumes, call observe_screen and decide again.');
+      }
       if (err instanceof DeviceError && err.code === 'geometry_changed') {
         this.observation = null;
         return errorResult(`${message} Call observe_screen to get fresh coordinates.`);
@@ -558,7 +633,8 @@ export class AgentToolkit {
     this.actionsUsed += 1;
     this.task.onActionsUsed(this.actionsUsed);
     this.attempts.set(signature, previous + 1);
-    if (action.kind === 'type_text' && result.ok) this.pendingTypedText = true;
+    // Text ending in a line break was committed by that Return (it needed approval).
+    if (action.kind === 'type_text' && result.ok) this.pendingTypedText = !/[\r\n]$/.test(action.text);
     if (action.kind === 'press_home' || action.kind === 'launch_app') this.pendingTypedText = false;
 
     // Verify: settle, then look again.
@@ -568,7 +644,10 @@ export class AgentToolkit {
     try {
       after = await this.observe({ settle: true, title: 'Checked the result' });
     } catch (err) {
+      if (err instanceof TaskAbortedError) throw err;
       observeError = err instanceof Error ? err.message : String(err);
+      // Never act on the pre-action screen: the next action observes first.
+      this.observation = null;
     }
     const changed = after ? after.observation.description.fingerprint !== fingerprintBefore : null;
     this.unchangedStreak = changed === false ? this.unchangedStreak + 1 : 0;
@@ -606,10 +685,130 @@ export class AgentToolkit {
     };
   }
 
+  /** Evaluates the policy against live settings and the given observation. */
+  private decide(action: DeviceAction, target: PolicyTarget, observation: Observation): PolicyDecision {
+    const settings = this.deps.settings.get();
+    return evaluatePolicy({
+      actor: 'ai',
+      action,
+      mode: settings.permissions.controlMode,
+      permissions: settings.permissions,
+      stopLatched: this.deps.device.isStopLatched,
+      target,
+      context: {
+        pendingTypedText: this.pendingTypedText || (this.task.uncommittedTyping?.() ?? false),
+        screenTexts: observation.description.elements.map((e) => e.label).filter(Boolean),
+        blockedForeground: observation.foreground,
+      },
+    });
+  }
+
+  /** What the policy is told the action touches, derived from an observation. */
+  private policyTarget(action: DeviceAction, ref: TargetRef, observation: Observation): PolicyTarget {
+    if (ref.kind === 'element') return { label: ref.label };
+    if (ref.kind === 'point' && 'x' in action) {
+      const hit = labelsAtPoint(observation.description.elements, action.x, action.y);
+      return { label: hit.primary, candidates: hit.candidates, nearby: hit.nearby };
+    }
+    if (action.kind === 'type_text') return { label: focusedFieldGuess(observation.description.elements) };
+    if (action.kind === 'launch_app') return { label: action.name };
+    return { label: null };
+  }
+
+  private blocked(action: DeviceAction, summary: string, displayArgs: Record<string, unknown>, decision: PolicyDecision): ToolOutput {
+    this.task.addStep({
+      type: 'policy',
+      title: `Blocked: ${summary}`,
+      detail: decision.reasons.join('\n'),
+      tool: { name: action.kind, args: displayArgs, ok: false, result: 'Blocked by policy', durationMs: null },
+      screenshotId: null,
+    });
+    this.deps.activity.record({
+      category: 'policy',
+      type: 'policy.denied',
+      actor: 'ai',
+      severity: 'warning',
+      summary: `Blocked AI action: ${summary}`,
+      taskId: this.task.taskId,
+      workflowRunId: this.task.workflowRunId ?? null,
+      tool: action.kind,
+      detail: { reasons: decision.reasons, rules: decision.rules, args: displayArgs },
+    });
+    return errorResult(
+      `BLOCKED by iPhone AI's safety policy: ${decision.reasons.join(' ')} Do not try to reach the same result another way. Tell the user and call finish_task (status "needs_user" or "failed").`,
+    );
+  }
+
+  /**
+   * After an approval wait (up to minutes) the screen may differ from the one
+   * the user approved: a banner, a list refresh, manual use while paused, or a
+   * different app. Looks again and refuses unless the same target is still
+   * there and the live policy asks for nothing the user has not approved.
+   */
+  private async recheckAfterApproval(
+    action: DeviceAction,
+    ref: TargetRef,
+    before: Observation,
+    approved: PolicyDecision,
+    summary: string,
+    displayArgs: Record<string, unknown>,
+  ): Promise<{ decision: PolicyDecision; observation: Observation } | { refused: ToolOutput }> {
+    let fresh: { content: ModelContent[]; observation: Observation };
+    try {
+      fresh = await this.observe({ title: 'Re-checked the screen after approval', image: false });
+    } catch (err) {
+      if (err instanceof TaskAbortedError) throw err;
+      if (err instanceof DeviceError && (err.code === 'stop_latched' || err.code === 'aborted')) throw err;
+      const message = err instanceof Error ? err.message : String(err);
+      return { refused: errorResult(`Could not re-check the screen after your approval, so the action was NOT performed (${message}). Call observe_screen and try again.`) };
+    }
+    const changed = screenChange(action, ref, before, fresh.observation);
+    if (changed) {
+      this.task.addStep({
+        type: 'policy',
+        title: 'Screen changed while waiting for approval',
+        detail: `${summary} was not performed: ${changed}.`,
+        tool: null,
+        screenshotId: null,
+      });
+      return {
+        refused: {
+          content: [
+            {
+              type: 'text',
+              text: `The screen changed while waiting for approval (${changed}), so the approved action was NOT performed. Here is the current screen; re-plan, and a new approval will be requested if needed.`,
+            },
+            ...fresh.content,
+          ],
+          isError: true,
+        },
+      };
+    }
+    const decision = this.decide(action, this.policyTarget(action, ref, fresh.observation), fresh.observation);
+    if (decision.verdict === 'deny') return { refused: this.blocked(action, summary, displayArgs, decision) };
+    const added = decision.rules.filter((rule) => !approved.rules.includes(rule));
+    if (added.length > 0) {
+      const reasons = decision.reasons.filter((_, i) => added.includes(decision.rules[i]!));
+      this.task.addStep({
+        type: 'policy',
+        title: 'Needs a new approval',
+        detail: `${summary} was not performed: ${reasons.join(' ')}`,
+        tool: null,
+        screenshotId: null,
+      });
+      return {
+        refused: errorResult(
+          `Things changed while waiting for approval (${reasons.join(' ')}), so the approved action was NOT performed. Call the tool again to request a new approval, or call finish_task.`,
+        ),
+      };
+    }
+    return { decision, observation: fresh.observation };
+  }
+
   private resolveTarget(
     args: Record<string, unknown>,
     observation: Observation,
-  ): { x: number; y: number; label: string | null; description: string } | { error: string } {
+  ): { x: number; y: number; ref: TargetRef; description: string } | { error: string } {
     const geometry = observation.description.geometry ?? this.deps.device.geometry;
     if (typeof args.element_id === 'string' && args.element_id) {
       const element = observation.byId.get(args.element_id);
@@ -619,7 +818,7 @@ export class AgentToolkit {
       return {
         x: element.x,
         y: element.y,
-        label: element.label || null,
+        ref: { kind: 'element', label: element.label || null },
         description: element.label ? `“${element.label}” (${element.id})` : `icon ${element.id} at (${element.x}, ${element.y})`,
       };
     }
@@ -628,13 +827,14 @@ export class AgentToolkit {
       if (args.x > geometry.widthPt || args.y > geometry.heightPt) {
         return { error: `(${args.x}, ${args.y}) is outside the screen (${geometry.widthPt}×${geometry.heightPt} points).` };
       }
-      // The nearest labelled element tells the policy what is being touched.
-      const nearest = nearestElement(observation.description.elements, args.x, args.y, 40);
+      // Every label the tap may hit tells the policy what is being touched.
+      const hit = labelsAtPoint(observation.description.elements, args.x, args.y);
+      const near = hit.primary ?? hit.candidates[0] ?? null;
       return {
         x: args.x,
         y: args.y,
-        label: nearest?.label || null,
-        description: nearest ? `near “${nearest.label}” at (${Math.round(args.x)}, ${Math.round(args.y)})` : `point (${Math.round(args.x)}, ${Math.round(args.y)})`,
+        ref: { kind: 'point' },
+        description: near ? `near “${near}” at (${Math.round(args.x)}, ${Math.round(args.y)})` : `point (${Math.round(args.x)}, ${Math.round(args.y)})`,
       };
     }
     return { error: 'Give element_id (preferred) or both x and y.' };
@@ -681,18 +881,95 @@ export function formatObservation(description: ScreenDescription): string {
   return lines.join('\n');
 }
 
-function nearestElement(elements: readonly ScreenElement[], x: number, y: number, maxDistance: number): ScreenElement | null {
-  let best: ScreenElement | null = null;
-  let bestDistance = maxDistance;
-  for (const e of elements) {
-    if (!e.label) continue;
-    const d = Math.hypot(e.x - x, e.y - y);
-    if (d <= bestDistance) {
-      best = e;
-      bestDistance = d;
+/** Why the screen no longer matches what was approved (null: it still matches). */
+function screenChange(action: DeviceAction, ref: TargetRef, before: Observation, fresh: Observation): string | null {
+  const contentChange = screenDiff(before.description, fresh.description);
+  if ('x' in action) {
+    const g0 = before.description.geometry?.geometryId ?? null;
+    const g1 = fresh.description.geometry?.geometryId ?? null;
+    if (g0 && g1 && g0 !== g1) return 'the iPhone window changed size';
+    const at = `(${Math.round(action.x)}, ${Math.round(action.y)})`;
+    if (ref.kind === 'element' && ref.label) {
+      const label = ref.label;
+      const still = fresh.description.elements.some(
+        (e) => e.label && sameLabel(e.label, label) && Math.hypot(e.x - action.x, e.y - action.y) <= 20,
+      );
+      return still ? null : `“${label}” is no longer at ${at}`;
     }
+    if (ref.kind === 'element') {
+      // An unlabeled icon: it must still be there, on the same screen.
+      const icon = fresh.description.elements.some((e) => !e.label && Math.hypot(e.x - action.x, e.y - action.y) <= 15);
+      return icon ? contentChange : `the icon at ${at} is gone`;
+    }
+    if (ref.kind === 'point') {
+      const was = labelsAtPoint(before.description.elements, action.x, action.y).primary;
+      const now = labelsAtPoint(fresh.description.elements, action.x, action.y).primary;
+      if ((was ?? '') !== (now ?? '') && !(was && now && sameLabel(was, now))) {
+        return now ? `the label at ${at} is now “${now}”` : `“${was}” is no longer at ${at}`;
+      }
+      return was ? null : contentChange;
+    }
+    return contentChange;
   }
-  return best;
+  // Going Home or opening an app does the same thing on any screen.
+  if (action.kind === 'press_home' || action.kind === 'launch_app') return null;
+  return contentChange;
+}
+
+/** Text that changes on its own (clocks, timers, counters, percentages) — ignored when comparing screens. */
+const VOLATILE_TEXT = /^[\d\s:.,%+\-–—()/]*(am|pm)?$/i;
+
+/**
+ * Compares two observations of "the same screen": refuses when new text
+ * appeared (a dialog, another app) or most of the text is gone; ignores
+ * numbers and times that tick, and items that only moved.
+ */
+function screenDiff(before: ScreenDescription, fresh: ScreenDescription): string | null {
+  if (before.fingerprint === fresh.fingerprint) return null;
+  const texts = (d: ScreenDescription) =>
+    new Set(d.elements.map((e) => normalizeText(e.label)).filter((t) => t && !VOLATILE_TEXT.test(t)));
+  const was = texts(before);
+  const now = texts(fresh);
+  const added = [...now].filter((t) => !was.has(t));
+  if (added.length > 0) return `new text appeared (“${added[0]}”)`;
+  const removed = [...was].filter((t) => !now.has(t));
+  if (removed.length > Math.max(2, was.size / 3)) return 'most of the screen changed';
+  return null;
+}
+
+function sameLabel(a: string, b: string): boolean {
+  return normalizeText(a) === normalizeText(b);
+}
+
+/** Told to the model with every observation while a blocked app is on screen. */
+function foregroundNotice(foreground: BlockedForeground): string {
+  return foreground.where === 'top_hit'
+    ? `SAFETY: Spotlight's top hit “${foreground.label}” is a blocked app (${foreground.app}). Pressing Return would open it and is refused. Clear the search or go Home.`
+    : `SAFETY: A blocked app (${foreground.app}) appears to be open (“${foreground.label}”). Do not act inside it: call go_home, or finish_task with status "needs_user". Any other action needs the user's approval.`;
+}
+
+/**
+ * The approval card shows the text that will actually be typed (live only —
+ * the stored approval and the activity history keep "«N characters»"). Text
+ * that looks like a secret stays hidden.
+ */
+function typingPreview(
+  text: string,
+  targetDescription: string,
+  decision: PolicyDecision,
+  observation: Observation,
+): { summary: string; args: Record<string, unknown> } {
+  const masked =
+    decision.rules.some((r) => r.startsWith('sensitive.auth') || r.startsWith('auth.')) ||
+    screenHasAuthPrompt(observation.description.elements.map((e) => e.label)) !== null;
+  const suffix = targetDescription ? ` — ${targetDescription}` : '';
+  if (masked) {
+    return { summary: `Type ${describeTypedText(text)} (hidden: it looks like a password or code)${suffix}`, args: { text: describeTypedText(text) } };
+  }
+  const shown = redactSecrets(text);
+  // Make Return and Tab visible on the card.
+  const visible = shown.replace(/\r\n|\r|\n/g, '⏎').replace(/\t/g, '⇥');
+  return { summary: `Type “${visible}”${suffix}`, args: { text: shown } };
 }
 
 /** Best guess of the focused field's label (used to block typing into password fields). */

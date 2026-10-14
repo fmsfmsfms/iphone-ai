@@ -3,6 +3,7 @@
 // device, stream, agent and workflow services (only what the routes call).
 
 import { mkdtempSync, rmSync } from 'node:fs';
+import { connect } from 'node:net';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
@@ -72,6 +73,7 @@ export function createFakes() {
       stopLatched = false;
     }),
     refocusApp: vi.fn(),
+    checkHealth: vi.fn(async () => ({ ok: true, text: 'All checks passed' })),
     getStatus: vi.fn(() => fakeStatus(stopLatched)),
     getLatestFrame: vi.fn(() => null),
     get isStopLatched() {
@@ -237,6 +239,33 @@ export function remoteHeaders(cookie: string | null, extra: Record<string, strin
     ...(cookie ? { cookie } : {}),
     ...extra,
   };
+}
+
+/**
+ * Sends one raw HTTP/1.1 request over a real socket and resolves with the
+ * status code. inject() normalises request targets, so absolute-form targets
+ * ("GET http://host/path HTTP/1.1") can only be tested this way.
+ */
+export function rawHttpStatus(port: number, requestTarget: string, host: string, headers: Record<string, string> = {}): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const socket = connect({ host: '127.0.0.1', port });
+    let data = '';
+    socket.setEncoding('utf8');
+    socket.on('data', (chunk: string) => {
+      data += chunk;
+      const match = /^HTTP\/1\.1 (\d{3})/.exec(data);
+      if (match) {
+        resolve(Number(match[1]));
+        socket.destroy();
+      }
+    });
+    socket.on('error', reject);
+    socket.on('close', () => reject(new Error(`no HTTP response: ${JSON.stringify(data.slice(0, 200))}`)));
+    const extra = Object.entries(headers)
+      .map(([name, value]) => `${name}: ${value}\r\n`)
+      .join('');
+    socket.write(`GET ${requestTarget} HTTP/1.1\r\nHost: ${host}\r\n${extra}Connection: close\r\n\r\n`);
+  });
 }
 
 export async function loginDesktop(h: Harness): Promise<string> {

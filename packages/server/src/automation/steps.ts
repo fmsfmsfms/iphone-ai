@@ -129,10 +129,30 @@ export function nearestElement(
   return best;
 }
 
+const VARIABLE_PATTERN = /\{([A-Za-z0-9_-]{1,60})\}/g;
+
 /** Replaces {name} placeholders with values saved by earlier read_screen steps. */
 export function fillVariables(text: string, vars: ReadonlyMap<string, string>): string {
   if (vars.size === 0) return text;
-  return text.replace(/\{([A-Za-z0-9_-]{1,60})\}/g, (whole, name: string) => vars.get(name) ?? whole);
+  return text.replace(VARIABLE_PATTERN, (whole, name: string) => vars.get(name) ?? whole);
+}
+
+/** Names of the {name} placeholders a text refers to. */
+export function referencedVariables(text: string): string[] {
+  return [...text.matchAll(VARIABLE_PATTERN)].map((m) => m[1]!);
+}
+
+/**
+ * Best guess of the focused field's label, so the policy's password / code
+ * field rule also applies to workflow typing (same heuristic as the AI agent).
+ * Only field-like labels (placeholders/prompts) count, not list rows such as
+ * "Face ID & Passcode".
+ */
+export function focusedFieldGuess(elements: readonly ScreenElement[]): string | null {
+  const fieldLabel =
+    /^(enter )?(your )?(apple (account|id) )?(password|passcode|pin|code|verification code|one[- ]time code|security code)( required)?:?$|^(كلمة المرور|رمز التحقق|رمز المرور)$/i;
+  const field = elements.find((e) => fieldLabel.test(e.label.trim()));
+  return field?.label ?? null;
 }
 
 /** Gives every step a unique id (keeps valid ids, renumbers missing/duplicate ones as s1, s2, …). */

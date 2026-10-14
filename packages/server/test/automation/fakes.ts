@@ -86,6 +86,12 @@ export class FakeDevice extends EventEmitter implements WorkflowDevice {
   captureAllowed = true;
   stopLatched = false;
   performDelayMs = 0;
+  /**
+   * Runs while an action waits in the device lane (after it was accepted, before
+   * it executes) — e.g. to pause or stop the run in that window. The action is
+   * then checked again at execution time, like DeviceController does.
+   */
+  whileQueued: ((action: DeviceAction, ctx: ActionContext) => void | Promise<void>) | null = null;
   readonly performed: { action: DeviceAction; ctx: ActionContext }[] = [];
   readonly leasePausedHistory: boolean[] = [];
   describeCount = 0;
@@ -140,7 +146,21 @@ export class FakeDevice extends EventEmitter implements WorkflowDevice {
   }
 
   async perform(action: DeviceAction, ctx: ActionContext): Promise<ActionResult> {
+    this.assertAuthorized(action, ctx);
+    if (this.whileQueued) {
+      await this.whileQueued(action, ctx);
+      this.assertAuthorized(action, ctx);
+    }
+    if (this.performDelayMs > 0) await new Promise((resolve) => setTimeout(resolve, this.performDelayMs));
+    this.performed.push({ action, ctx });
+    this.applyTransition(action);
+    this.emit('action', { action, ctx, ok: true });
+    return { ok: true, tool: ACTION_TOOL[action.kind], durationMs: 1, message: 'ok', focusChanged: false };
+  }
+
+  private assertAuthorized(action: DeviceAction, ctx: ActionContext): void {
     if (this.stopLatched) throw new FakeDeviceError('Emergency stop is engaged.', 'stop_latched');
+    if (ctx.signal?.aborted) throw new FakeDeviceError('The task was cancelled before this action ran.', 'aborted');
     if (ctx.decision.verdict === 'deny') throw new FakeDeviceError('Denied by policy.', 'not_authorized');
     if (ctx.decision.verdict === 'require_approval' && !ctx.approvalId) {
       throw new FakeDeviceError('This action needs approval first.', 'not_authorized');
@@ -148,15 +168,11 @@ export class FakeDevice extends EventEmitter implements WorkflowDevice {
     if (ctx.actor === 'workflow' || ctx.actor === 'ai') {
       const lease = this.leaseState?.lease;
       if (!lease || lease.id !== ctx.leaseId) throw new FakeDeviceError('No longer holds control.', 'lease_conflict');
+      if (lease.paused) throw new FakeDeviceError('The task was paused before this action ran; it was not executed.', 'lease_paused');
     }
     if (['tap', 'double_tap', 'long_press', 'swipe', 'drag'].includes(action.kind) && ctx.geometryId !== this.geometryValue?.geometryId) {
       throw new FakeDeviceError('The iPhone window changed size.', 'geometry_changed');
     }
-    if (this.performDelayMs > 0) await new Promise((resolve) => setTimeout(resolve, this.performDelayMs));
-    this.performed.push({ action, ctx });
-    this.applyTransition(action);
-    this.emit('action', { action, ctx, ok: true });
-    return { ok: true, tool: ACTION_TOOL[action.kind], durationMs: 1, message: 'ok', focusChanged: false };
   }
 
   private applyTransition(action: DeviceAction): void {

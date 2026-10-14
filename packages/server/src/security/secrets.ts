@@ -2,6 +2,16 @@
 //
 // Secrets are written through `security -i` on stdin, hex-encoded with -X,
 // so they never appear in a process argument list (visible to `ps`).
+//
+// Known limitation: items are created by /usr/bin/security with the default
+// ACL, which trusts /usr/bin/security itself. Any program running as the same
+// macOS user can therefore read them without a Keychain prompt
+// (`security find-generic-password -s "iPhone AI" -a <account> -w`). The
+// Keychain protects them from other users and at rest, not from same-user
+// code. Do not add -T/ACL flags here: the backend reads through the same
+// binary and would then prompt or fail. Real per-app isolation needs Keychain
+// access from the signed app (Security framework, code-signature ACL) with a
+// stable signing identity.
 
 import { spawn } from 'node:child_process';
 

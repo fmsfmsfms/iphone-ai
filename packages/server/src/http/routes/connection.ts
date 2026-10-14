@@ -6,7 +6,7 @@ import { z } from 'zod';
 import { parseHealth } from '../../mcp/parsers.js';
 import { actorFor, parseBody, requireControl, requireLocal, requireSession, type RouteDeps } from '../guards.js';
 import { openWithSystem } from './auth.js';
-import { scrubText } from './system.js';
+import { scrubText } from '../redaction.js';
 
 /** The only System Settings panes the UI may open (no free-form URLs reach /usr/bin/open). */
 export const SETTINGS_PANES = {
@@ -49,7 +49,7 @@ export function registerConnectionRoutes(app: FastifyInstance, deps: RouteDeps):
     requireControl(request, auth);
     const outcome = await ctx.device.checkHealth();
     const parsed = parseHealth(outcome.text);
-    return { ok: outcome.ok && parsed.ok, items: parsed.items, raw: outcome.text };
+    return { ok: outcome.ok && parsed.ok, items: parsed.items, raw: scrubText(outcome.text) };
   });
 
   app.get('/api/connection/doctor', async () => ({ checks: (await ctx.mirroir.runDoctor()) ?? [] }));

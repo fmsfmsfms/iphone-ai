@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { renderSkillMarkdown } from '../../src/automation/skill-export.js';
 import { parseSuggestion } from '../../src/automation/suggest.js';
+import { HIDDEN_TEXT } from '../../src/automation/workflow-service.js';
 import { createHarness, type Harness } from './fakes.js';
 
 let h: Harness;
@@ -207,7 +208,7 @@ describe('recorder', () => {
     expect(h.service.list()).toHaveLength(1);
   });
 
-  it('marks typing on a password screen as sensitive and discards when not saving', async () => {
+  it('never stores text typed on a password screen (a checkpoint replaces it) and discards when not saving', async () => {
     h.device.screens.login = [
       { label: 'Apple Account', x: 205, y: 120 },
       { label: 'Password', x: 205, y: 300 },
@@ -218,12 +219,67 @@ describe('recorder', () => {
     h.device.emitManual({ kind: 'type_text', text: 'secret' });
     expect(h.service.recorderStatus().steps).toBe(1);
     const recorded = h.service.stopRecording(true)!;
-    expect(recorded.steps[0]).toEqual({ id: 's1', type: 'type_text', text: 'secret', sensitive: true });
+    expect(recorded.steps).toEqual([
+      { id: 's1', type: 'checkpoint', message: 'Enter the password or code yourself on the iPhone, then approve to continue.' },
+    ]);
+    expect(recorded.description).toContain('Typed text on a password or code field was not recorded; a checkpoint was added instead.');
+    expect(JSON.stringify(h.db.all('SELECT * FROM workflows'))).not.toContain('secret');
 
     h.service.startRecording('Discard me');
     await h.service.recorderSettled();
     h.device.emitManual({ kind: 'press_home' });
     expect(h.service.stopRecording(false)).toBeNull();
     expect(h.service.list()).toHaveLength(1);
+  });
+});
+
+describe('stored secrets', () => {
+  const steps = [
+    { id: 'a', type: 'tap_text', label: 'Password' },
+    { id: 'b', type: 'type_text', text: 'hunter2', sensitive: true },
+    { id: 'c', type: 'type_text', text: 'hello' },
+  ] as const;
+
+  it('never returns the text of sensitive steps (the API serves these to every session)', () => {
+    const created = h.service.create({ name: 'Login', description: '', steps: [...steps], source: 'manual' });
+    expect(created.steps[1]).toEqual({ id: 'b', type: 'type_text', text: HIDDEN_TEXT, sensitive: true });
+    expect(created.steps[2]).toEqual({ id: 'c', type: 'type_text', text: 'hello' });
+    expect(JSON.stringify(h.service.list())).not.toContain('hunter2');
+    expect(JSON.stringify(h.service.get(created.id))).not.toContain('hunter2');
+    expect(h.service.get(created.id)!.steps[2]).toEqual({ id: 'c', type: 'type_text', text: 'hello' });
+  });
+
+  it('keeps the stored text when a hidden step is sent back unchanged, and refuses copying it', async () => {
+    const created = h.service.create({ name: 'Login', description: '', steps: [...steps], source: 'manual' });
+    const fetched = h.service.get(created.id)!;
+    const updated = h.service.update(created.id, { name: 'Login 2', description: '', steps: fetched.steps, source: 'manual' });
+    expect(updated.name).toBe('Login 2');
+    expect(JSON.stringify(updated)).not.toContain('hunter2');
+
+    // The real text is still what a run types (once typing secrets is allowed).
+    h.settings.mutate((d) => {
+      d.permissions.blockTypingOnAuthScreens = false;
+    });
+    h.device.screens.settings!.push({ label: 'Password', x: 205, y: 420 });
+    h.device.current = 'settings';
+    const started = await h.service.run(created.id, 'user');
+    // The tap on "Password" needs approval (sensitive keyword).
+    const approve = setInterval(() => {
+      for (const pending of h.approvals.listPending()) h.approvals.decide(pending.id, 'approved', 'test-user');
+    }, 5);
+    const run = await h.service.waitForRun(started.id);
+    clearInterval(approve);
+    expect(run.status).toBe('succeeded');
+    expect(h.device.performed.filter((p) => p.action.kind === 'type_text').map((p) => p.action)).toEqual([
+      { kind: 'type_text', text: 'hunter2' },
+      { kind: 'type_text', text: 'hello' },
+    ]);
+
+    // A copied hidden step has no stored text to restore.
+    const copy = { ...fetched.steps[1]!, id: 'b2' };
+    expect(() => h.service.update(created.id, { name: 'Login', description: '', steps: [...fetched.steps, copy], source: 'manual' })).toThrow(
+      /hidden text that can't be copied/,
+    );
+    expect(() => h.service.create({ name: 'Copy', description: '', steps: [copy], source: 'manual' })).toThrow(/hidden text that can't be copied/);
   });
 });

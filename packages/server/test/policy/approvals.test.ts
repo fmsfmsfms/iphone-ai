@@ -164,4 +164,40 @@ describe('ApprovalBroker', () => {
     broker.cancelAll('done');
     await pending;
   });
+
+  it('shows a live-only preview on the pending card but persists and audits only the redacted copy', async () => {
+    const pending = broker.request(
+      input({
+        summary: 'Type «31 characters»',
+        action: { tool: 'type_text', args: { text: '«31 characters»' } },
+        preview: { summary: 'Type “transfer 5000 to SA03 8000 1234”', args: { text: 'transfer 5000 to SA03 8000 1234' } },
+      }),
+    );
+    const [live] = broker.listPending();
+    expect(live!.summary).toContain('transfer 5000 to SA03 8000 1234');
+    expect(live!.action.args.text).toBe('transfer 5000 to SA03 8000 1234');
+    const requested = ctx.events.find((e) => e.type === 'approval_requested');
+    expect(requested && requested.type === 'approval_requested' && requested.approval.summary).toContain('SA03 8000 1234');
+
+    const stored = row(live!.id)!;
+    expect(String(stored.summary)).not.toContain('SA03');
+    expect(String(stored.action_json)).not.toContain('SA03');
+    broker.decide(live!.id, 'approved', 'user');
+    expect(await pending).toBe('approved');
+    expect(JSON.stringify(resolvedEvents())).not.toContain('SA03');
+    expect(JSON.stringify(broker.recent())).not.toContain('SA03');
+    expect(JSON.stringify(ctx.activity.query({ categories: ['approval'] }))).not.toContain('SA03');
+  });
+
+  it('cancelWhere cancels only the matching pending requests', async () => {
+    const ai = broker.request(input({ actor: 'ai' }));
+    const workflow = broker.request(input({ actor: 'workflow', taskId: null, workflowRunId: 'run_1' }));
+    const manual = broker.request(input({ actor: 'user', taskId: null }));
+    expect(broker.cancelWhere((r) => r.actor === 'ai' || r.actor === 'workflow', 'Control mode changed to Observe Only')).toBe(2);
+    expect(await ai).toBe('cancelled');
+    expect(await workflow).toBe('cancelled');
+    expect(broker.listPending().map((r) => r.actor)).toEqual(['user']);
+    broker.cancelAll('done');
+    expect(await manual).toBe('cancelled');
+  });
 });

@@ -1,24 +1,17 @@
 // Health, bootstrap snapshot, status and diagnostics.
 
 import { closeSync, existsSync, openSync, readSync, statSync } from 'node:fs';
-import { homedir, release } from 'node:os';
+import { release } from 'node:os';
 
 import type { FastifyInstance } from 'fastify';
-import type { AppSettings } from '@iphone-ai/shared';
 
-import { redactSecrets, redactUrl } from '../../core/redact.js';
 import type { AppContext } from '../../core/services.js';
+import type { AuthSession } from '../auth.js';
 import { requireSession, sessionSummary, type RouteDeps } from '../guards.js';
+import { exportableSettings, scrubText, settingsForSession } from '../redaction.js';
 
 const LOG_TAIL_BYTES = 256 * 1024;
 const LOG_TAIL_LINES = 500;
-
-/** Replaces the home directory with "~" so exports do not reveal the account name. */
-export function scrubText(text: string): string {
-  const home = homedir();
-  const scrubbed = home ? text.split(home).join('~') : text;
-  return redactSecrets(scrubbed);
-}
 
 function readLogTail(file: string): string[] {
   if (!existsSync(file)) return [];
@@ -39,27 +32,17 @@ function readLogTail(file: string): string[] {
   }
 }
 
-/** Settings without anything secret-like (settings never hold keys; URLs may carry credentials). */
-export function exportableSettings(settings: AppSettings): AppSettings {
-  return {
-    ...settings,
-    connection: { ...settings.connection, mirroirBinaryPath: scrubText(settings.connection.mirroirBinaryPath) },
-    ai: {
-      ...settings.ai,
-      providers: settings.ai.providers.map((p) => ({ ...p, baseUrl: p.baseUrl ? redactUrl(p.baseUrl) : null })),
-    },
-  };
-}
-
-export function diagnosticsInfo(ctx: AppContext) {
+/** Paths are shown as stored to local sessions; remote sessions get them without the account name. */
+export function diagnosticsInfo(ctx: AppContext, session: Pick<AuthSession, 'kind'> | null) {
   const server = ctx.mirroir.info();
+  const path = (value: string): string => (session && session.kind !== 'remote' ? value : scrubText(value));
   return {
     version: ctx.version,
     node: process.version,
     platform: process.platform,
     arch: process.arch,
-    dataDir: ctx.paths.dataDir,
-    mirroirBinary: ctx.mirroir.resolveBinary() ?? server.binaryPath,
+    dataDir: path(ctx.paths.dataDir),
+    mirroirBinary: path(ctx.mirroir.resolveBinary() ?? server.binaryPath),
     mirroirVersion: server.version,
   };
 }
@@ -77,7 +60,7 @@ export function registerSystemRoutes(app: FastifyInstance, deps: RouteDeps): voi
     const session = requireSession(request);
     return {
       status: ctx.device.getStatus(),
-      settings: ctx.settings.get(),
+      settings: settingsForSession(ctx.settings.get(), session),
       stream: ctx.stream.stats(),
       pendingApprovals: ctx.approvals.listPending(),
       activeTask: ctx.agents.activeTask(),
@@ -89,7 +72,7 @@ export function registerSystemRoutes(app: FastifyInstance, deps: RouteDeps): voi
 
   app.get('/api/status', async () => ctx.device.getStatus());
 
-  app.get('/api/diagnostics/info', async () => diagnosticsInfo(ctx));
+  app.get('/api/diagnostics/info', async (request) => diagnosticsInfo(ctx, requireSession(request)));
 
   app.get('/api/diagnostics/export', async (_request, reply) => {
     const server = ctx.mirroir.info();

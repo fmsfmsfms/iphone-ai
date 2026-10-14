@@ -10,6 +10,7 @@ import { WS_PATH, type ServerEvent } from '@iphone-ai/shared';
 import { newId } from '../core/ids.js';
 import { WS_CLOSE_SESSION_ENDED } from './auth.js';
 import type { RouteDeps } from './guards.js';
+import { exportableSettings } from './redaction.js';
 
 const HEARTBEAT_MS = 30_000;
 /** Clients that cannot keep up (e.g. a stalled remote browser) are dropped. */
@@ -31,6 +32,8 @@ function rawToString(data: RawData): string {
 interface Connection {
   id: string;
   sessionId: string;
+  /** Remote sessions receive settings events redacted (see redaction.ts). */
+  remote: boolean;
   socket: WebSocket;
   alive: boolean;
   lastActivityPing: number;
@@ -57,13 +60,15 @@ export function registerWebSocket(app: FastifyInstance, deps: RouteDeps): void {
   const unsubscribe = ctx.hub.subscribe((event: ServerEvent) => {
     if (connections.size === 0) return;
     let payload: string;
+    let remotePayload: string;
     try {
       payload = JSON.stringify(event);
+      remotePayload = event.type === 'settings' ? JSON.stringify({ ...event, settings: exportableSettings(event.settings) }) : payload;
     } catch (err) {
       log.warn('Could not serialise an event', { type: event.type, error: err instanceof Error ? err.message : String(err) });
       return;
     }
-    for (const conn of connections.values()) send(conn, payload);
+    for (const conn of connections.values()) send(conn, conn.remote ? remotePayload : payload);
   });
 
   const heartbeat = setInterval(() => {
@@ -99,7 +104,14 @@ export function registerWebSocket(app: FastifyInstance, deps: RouteDeps): void {
       socket.close(WS_CLOSE_SESSION_ENDED, 'Unauthenticated');
       return;
     }
-    const conn: Connection = { id: newId('ws'), sessionId: session.id, socket, alive: true, lastActivityPing: 0 };
+    const conn: Connection = {
+      id: newId('ws'),
+      sessionId: session.id,
+      remote: session.kind === 'remote',
+      socket,
+      alive: true,
+      lastActivityPing: 0,
+    };
     connections.set(conn.id, conn);
     const untrack = auth.trackSocket(session.id, (code, reason) => socket.close(code, reason));
 

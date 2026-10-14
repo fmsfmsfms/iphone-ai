@@ -17,7 +17,7 @@ import type { AppContext } from '../core/services.js';
 import type { RemoteAccessApi } from '../remote/remote-access.js';
 import { remoteAccessFor } from '../remote/registry.js';
 import { sharedAuthService, type AuthService, type ListenerKind } from './auth.js';
-import { installErrorHandler } from './errors.js';
+import { HttpError, installErrorHandler } from './errors.js';
 import type { RouteDeps } from './guards.js';
 import { registerActivityRoutes } from './routes/activity.js';
 import { registerAssistantRoutes } from './routes/assistant.js';
@@ -30,7 +30,7 @@ import { registerScreenRoutes } from './routes/screen.js';
 import { registerSettingsRoutes } from './routes/settings.js';
 import { registerSystemRoutes } from './routes/system.js';
 import { registerWorkflowRoutes } from './routes/workflows.js';
-import { installSecurityHooks } from './security.js';
+import { installSecurityHooks, needsSession } from './security.js';
 import { registerStaticUi } from './static-ui.js';
 import { registerWebSocket } from './ws.js';
 
@@ -146,6 +146,14 @@ export function createHttpServer(ctx: AppContext, options: CreateHttpServerOptio
 
   // Routes live in a child context registered after @fastify/websocket (its onRoute hook must see them).
   app.register(async (instance) => {
+    // Defence in depth, independent of how the URL was spelled: every matched
+    // /api route (except the public ones) and /ws needs the session the root
+    // hook resolved.
+    instance.addHook('onRequest', async (request) => {
+      if (!request.authSession && needsSession(request.method, request.routeOptions.url ?? '')) {
+        throw new HttpError(401, 'unauthenticated', 'Sign in to iPhone AI first.');
+      }
+    });
     registerSystemRoutes(instance, deps);
     registerAuthRoutes(instance, deps);
     registerConnectionRoutes(instance, deps);

@@ -4,8 +4,14 @@
 //  3. State-changing methods must carry the x-iphone-ai header (CSRF defence) → 403
 //  4. /api/* (except health and remote-login) and /ws need a valid session cookie → 401
 // plus security headers on every response.
+//
+// The router (find-my-way) percent-decodes paths and accepts absolute-form
+// request targets, so the raw request.url is not what gets routed. Decisions
+// therefore consider every spelling the router could have used: the raw path,
+// its percent-decoded form and the matched route pattern. Only origin-form
+// targets ("/path") are accepted.
 
-import type { FastifyInstance, FastifyReply } from 'fastify';
+import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { CSRF_HEADER, SESSION_COOKIE, WS_PATH } from '@iphone-ai/shared';
 
 import { readCookie, type AuthService, type ListenerKind } from './auth.js';
@@ -25,17 +31,39 @@ export interface SecurityOptions {
   enabled(): boolean;
 }
 
+function isApiPath(path: string): boolean {
+  return path === '/api' || path.startsWith('/api/');
+}
+
 function isPublic(method: string, path: string): boolean {
   return (method === 'GET' && path === '/api/health') || (method === 'POST' && path === '/api/auth/remote-login');
 }
 
 export function needsSession(method: string, path: string): boolean {
   if (path === WS_PATH) return true;
-  if (path !== '/api' && !path.startsWith('/api/')) return false;
+  if (!isApiPath(path)) return false;
   return !isPublic(method, path);
 }
 
-function setSecurityHeaders(reply: FastifyReply, host: string, path: string): void {
+/** Percent-decoded path, or null when the escapes are malformed. */
+function decodePath(path: string): string | null {
+  try {
+    return decodeURIComponent(path);
+  } catch {
+    return null;
+  }
+}
+
+/** The raw path, its decoded form and the matched route pattern (undefined on a 404). */
+function routingViews(request: FastifyRequest, raw: string, decoded: string | null): string[] {
+  const views = [raw];
+  if (decoded !== null && decoded !== raw) views.push(decoded);
+  const routed = request.routeOptions.url;
+  if (typeof routed === 'string' && !views.includes(routed)) views.push(routed);
+  return views;
+}
+
+function setSecurityHeaders(reply: FastifyReply, host: string, views: readonly string[]): void {
   void reply.header('x-content-type-options', 'nosniff');
   void reply.header('referrer-policy', 'no-referrer');
   void reply.header('x-frame-options', 'DENY');
@@ -57,7 +85,7 @@ function setSecurityHeaders(reply: FastifyReply, host: string, path: string): vo
       "form-action 'self'",
     ].join('; '),
   );
-  if (path === '/api' || path.startsWith('/api/') || path.startsWith('/auth/')) {
+  if (views.some((path) => isApiPath(path) || path.startsWith('/auth/'))) {
     void reply.header('cache-control', 'no-store');
   }
 }
@@ -74,26 +102,35 @@ export function installSecurityHooks(app: FastifyInstance, options: SecurityOpti
   });
 
   app.addHook('onRequest', async (request, reply) => {
-    const path = pathOf(request.url);
+    const raw = pathOf(request.url);
+    const decoded = decodePath(raw);
+    const views = routingViews(request, raw, decoded);
     const host = (request.headers.host ?? '').trim().toLowerCase();
-    setSecurityHeaders(reply, options.allowedHosts().has(host) ? host : '', path);
+    setSecurityHeaders(reply, options.allowedHosts().has(host) ? host : '', views);
     const upgrade = (request.headers.upgrade ?? '').toLowerCase() === 'websocket';
     if (upgrade) void reply.header('connection', 'close');
 
     if (!options.allowedHosts().has(host)) {
       throw new HttpError(421, 'bad_host', 'This request was addressed to a host iPhone AI does not serve.');
     }
+    if (!request.url.startsWith('/')) {
+      throw new HttpError(400, 'bad_request_target', 'Only origin-form request targets are accepted.');
+    }
+    if (decoded === null) {
+      throw new HttpError(400, 'bad_path', 'Malformed URL path.');
+    }
     if (!options.enabled()) {
       throw new HttpError(503, 'remote_disabled', 'Remote access is turned off on the Mac.');
     }
 
+    const isWs = views.includes(WS_PATH);
     const origin = request.headers.origin;
     if (origin !== undefined) {
       const normalized = origin.trim().toLowerCase();
       if (normalized !== `http://${host}` && !options.extraOrigins.has(normalized)) {
         throw new HttpError(403, 'bad_origin', 'Cross-origin requests are not allowed.');
       }
-    } else if (path === WS_PATH) {
+    } else if (isWs) {
       throw new HttpError(403, 'bad_origin', 'WebSocket connections must come from the iPhone AI page.');
     }
 
@@ -104,9 +141,10 @@ export function installSecurityHooks(app: FastifyInstance, options: SecurityOpti
       }
     }
 
-    if (path === WS_PATH || path === '/api' || path.startsWith('/api/')) {
+    if (isWs || views.some(isApiPath)) {
       request.authSession = options.auth.resolve(readCookie(request.headers.cookie, SESSION_COOKIE), options.listener);
-      if (!request.authSession && needsSession(request.method, path)) {
+      // Public only when every spelling of the path agrees it is public.
+      if (!request.authSession && views.some((path) => needsSession(request.method, path))) {
         throw new HttpError(401, 'unauthenticated', 'Sign in to iPhone AI first.');
       }
     }

@@ -11,6 +11,7 @@ import {
 } from '@iphone-ai/shared';
 
 import {
+  checkLaunchName,
   containsKeyword,
   evaluatePolicy,
   matchesBlockedApp,
@@ -333,5 +334,133 @@ describe('text helpers', () => {
     expect(screenHasAuthPrompt(['Passwords', 'Wi-Fi'])).toBeNull();
     expect(screenHasPaymentSheet(['Confirm with Side Button'])).toBe('Confirm with Side Button');
     expect(screenHasPaymentSheet(['Pay'])).toBeNull();
+  });
+});
+
+describe('launch names that Spotlight resolves to a blocked app', () => {
+  const launch = (name: string) => evaluate({ action: { kind: 'launch_app', name }, target: null });
+
+  it('denies fragments, spellings and diacritic variants of blocked app names', () => {
+    for (const name of ['Walle', 'Wall', 'wallet', 'WALLÉT', 'Rajhi', 'alrajhi', 'Al-Rajhi', '1Pass', 'Authentica', 'Google Auth', 'Coinbas', 'PayPa', 'Venm', 'Passwor']) {
+      expect(launch(name), name).toMatchObject({ verdict: 'deny', rules: ['blocked_app.launch'] });
+    }
+  });
+
+  it('still allows ordinary apps (and whole-word containment stays whole-word)', () => {
+    for (const name of ['Settings', 'Safari', 'Messages', 'Photos', 'Wallpaper', 'App Store', 'Banking News', 'Gmail']) {
+      expect(launch(name).verdict, name).toBe('allow');
+    }
+  });
+
+  it('asks before opening a whole word of a longer blocked name, or a very short name', () => {
+    expect(launch('Google')).toMatchObject({ verdict: 'require_approval', rules: ['launch.partial_blocked_name'] });
+    expect(launch('Microsoft').rules).toEqual(['launch.partial_blocked_name']);
+    expect(launch('TV')).toMatchObject({ verdict: 'require_approval', rules: ['launch.short_name'] });
+  });
+
+  it('denies names with control or invisible characters', () => {
+    expect(launch('Wal​let')).toMatchObject({ verdict: 'deny', rules: ['launch.invalid_name'] });
+    expect(launch('Notes\n')).toMatchObject({ verdict: 'deny', rules: ['launch.invalid_name'] });
+  });
+
+  it('checkLaunchName reports what matched', () => {
+    const blocked = permissions().blockedApps;
+    expect(checkLaunchName('Walle', blocked)).toEqual({ kind: 'blocked', app: 'Wallet' });
+    expect(checkLaunchName('Google', blocked)).toEqual({ kind: 'partial_word', app: 'Google Authenticator' });
+    expect(checkLaunchName('Settings', blocked)).toBeNull();
+  });
+
+  it('denies typing a fragment of a blocked name into Spotlight, but not elsewhere', () => {
+    const type = (text: string, screenTexts: string[]) => evaluate({ action: { kind: 'type_text', text }, target: null, context: { screenTexts } });
+    expect(type('Walle', ['Siri Suggestions', 'Settings'])).toMatchObject({ verdict: 'deny', rules: ['blocked_app.typed'] });
+    expect(type('Walle', ['Top Hit', 'Wallet'])).toMatchObject({ verdict: 'deny', rules: ['blocked_app.typed'] });
+    expect(type('Walle', ['Notes', 'New Note']).verdict).toBe('allow');
+  });
+});
+
+describe('a blocked app already on screen', () => {
+  const header = { blockedForeground: { app: 'Wallet', label: 'Wallet', where: 'header' as const } };
+  const topHit = { blockedForeground: { app: 'Wallet', label: 'Wallet', where: 'top_hit' as const } };
+
+  it('requires approval for every action inside it except leaving', () => {
+    expect(evaluate({ label: 'Apple Cash', context: header })).toMatchObject({ verdict: 'require_approval', rules: ['blocked_app.foreground'] });
+    expect(evaluate({ action: { kind: 'swipe', fromX: 1, fromY: 2, toX: 3, toY: 4 }, target: null, context: header }).rules).toEqual([
+      'blocked_app.foreground',
+    ]);
+    expect(evaluate({ action: { kind: 'press_home' }, target: null, context: header }).verdict).toBe('allow');
+    expect(evaluate({ action: { kind: 'launch_app', name: 'Settings' }, target: null, context: header }).verdict).toBe('allow');
+  });
+
+  it("denies Return when Spotlight's top hit is a blocked app", () => {
+    expect(evaluate({ action: { kind: 'press_key', key: 'return' }, target: null, context: topHit })).toMatchObject({
+      verdict: 'deny',
+      rules: ['blocked_app.top_hit'],
+    });
+    expect(evaluate({ action: { kind: 'press_key', key: 'delete' }, target: null, context: topHit }).verdict).toBe('allow');
+  });
+});
+
+describe('line breaks and control characters in typed text', () => {
+  const type = (text: string) => evaluate({ action: { kind: 'type_text', text }, target: null });
+
+  it('treats a line break as a commit that needs approval (Mirroir types it as Return)', () => {
+    for (const text of ['On my way\n', 'x\r', 'x\r\n', 'a\nb']) {
+      expect(type(text), JSON.stringify(text)).toMatchObject({ verdict: 'require_approval', risk: 'high', rules: ['commit.in_text'] });
+    }
+    // Also when nothing was typed before, and in Assisted mode alongside the mode rule.
+    expect(evaluate({ mode: 'assisted', action: { kind: 'type_text', text: 'hi\n' }, target: null }).rules).toEqual([
+      'commit.in_text',
+      'mode.assisted',
+    ]);
+  });
+
+  it('denies raw control characters and asks before a Tab', () => {
+    expect(type('ding\u0007')).toMatchObject({ verdict: 'deny', rules: ['text.control_chars'] });
+    expect(type('a\u001bb').verdict).toBe('deny');
+    expect(type('name\tvalue')).toMatchObject({ verdict: 'require_approval', rules: ['text.tab'] });
+    expect(type('plain text').verdict).toBe('allow');
+  });
+});
+
+describe('coordinate taps that may hit a labelled control', () => {
+  // Right side of a full-width row: no label within reach, the row's label is a candidate.
+  const tapWith = (candidates: string[], nearby: string[] = []) =>
+    evaluate({ action: { kind: 'tap', x: 380, y: 818 }, target: { label: null, candidates, nearby } });
+
+  it('applies blocked-app and sensitive rules to every candidate label', () => {
+    const wallet = tapWith(['Wallet & Apple Pay']);
+    expect(wallet).toMatchObject({ verdict: 'deny', rules: ['blocked_app.target', 'sensitive.payment', 'target.unlabeled'] });
+    expect(wallet.reasons[0]).toContain('may hit "Wallet & Apple Pay"');
+    expect(tapWith(['Privacy & Security'])).toMatchObject({ verdict: 'require_approval', rules: ['sensitive.security', 'target.unlabeled'] });
+    const second = evaluate({ action: { kind: 'tap', x: 110, y: 412 }, target: { label: 'Health', candidates: ['Health', 'Wallet'] } });
+    expect(second).toMatchObject({ verdict: 'deny', rules: ['blocked_app.target'] });
+    expect(second.reasons[0]).toContain('may hit "Wallet"');
+    expect(tapWith(['General']).verdict).toBe('allow');
+  });
+
+  it('a row candidate does not make an unlabeled target safe after typing (the send arrow next to the draft)', () => {
+    const d = evaluate({ action: { kind: 'tap', x: 378, y: 800 }, target: { label: null, candidates: ['I quit'] }, context: { pendingTypedText: true } });
+    expect(d).toMatchObject({ verdict: 'require_approval', rules: ['target.unlabeled', 'commit.after_typing'] });
+  });
+
+  it('asks before a blind tap right next to sensitive or blocked text', () => {
+    expect(tapWith([], ['Delete'])).toMatchObject({ verdict: 'require_approval', rules: ['target.unlabeled', 'target.unlabeled_near_sensitive'] });
+    expect(tapWith([], ['Wallet']).rules).toContain('target.unlabeled_near_sensitive');
+    expect(tapWith([], ['Notes'])).toMatchObject({ verdict: 'allow', rules: ['target.unlabeled'] });
+  });
+
+  it('commit-after-typing checks every candidate', () => {
+    const d = evaluate({ target: { label: 'Notes', candidates: ['Notes', 'Send'] }, context: { pendingTypedText: true } });
+    expect(d.rules).toContain('commit.after_typing');
+  });
+});
+
+describe('one-time code screens', () => {
+  it('recognises "Enter the 6-digit code" style prompts', () => {
+    for (const text of ['Enter the 6-digit code we sent to +966…', 'Enter the code', 'Your sign-in code', 'Use the 4 digit code']) {
+      expect(evaluate({ action: { kind: 'type_text', text: '123456' }, target: null, context: { screenTexts: [text] } }).rules, text).toContain(
+        'auth.typing',
+      );
+    }
   });
 });

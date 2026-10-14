@@ -29,6 +29,7 @@ import type { SettingsStore } from '../core/settings-store.js';
 import { fromJson, toJson, type Database } from '../db/database.js';
 import { DeviceError, type DeviceController, type Lease } from '../device/device-controller.js';
 import type { ApprovalBroker } from '../policy/approvals.js';
+import { nextUncommittedTyping, type TypingActionEvent } from '../policy/typing.js';
 import { providerSecretAccount, type SecretStore } from '../security/secrets.js';
 import { agentSystemPrompt, screenSummaryPrompt } from './agent/prompts.js';
 import { describeProviderError, runAgent, type RunOutcome } from './agent/runner.js';
@@ -93,6 +94,10 @@ const KNOWN_CLAUDE_MODELS = ['claude-opus-5-5', 'claude-sonnet-5-5', 'claude-hai
 
 export class AgentService implements AgentServiceApi {
   private active: ActiveTask | null = null;
+  /** A task is being set up (provider build); the slot is taken before the first await. */
+  private starting = false;
+  /** Text typed on the phone (by anyone) that has not been sent or submitted yet. */
+  private uncommittedTyping = false;
   private readonly factory: Pick<ProviderFactory, 'build' | 'invalidate'>;
   private readonly log: Logger;
 
@@ -100,10 +105,21 @@ export class AgentService implements AgentServiceApi {
     this.log = deps.log.child('agent');
     const real = new ProviderFactory(deps.secrets, deps.paths, deps.log);
     this.factory = deps.buildProvider ? { build: deps.buildProvider, invalidate: () => undefined } : real;
-    deps.settings.onChange(() => this.factory.invalidate());
+    deps.settings.onChange((next, previous) => {
+      this.factory.invalidate();
+      // Lowering control to Observe Only withdraws every pending AI / workflow approval card.
+      if (next.permissions.controlMode === 'observe' && previous.permissions.controlMode !== 'observe') {
+        deps.approvals.cancelWhere((r) => r.actor === 'ai' || r.actor === 'workflow', 'Control mode changed to Observe Only');
+      }
+    });
     // The emergency stop aborts tasks that hold no lease too (Observe Only tasks).
     deps.device.on('stop', () => {
       if (this.active) this.active.controller.abort(new TaskAbortedError('Stopped by the emergency stop.', 'stopped'));
+    });
+    // Drafts typed by any actor (an earlier task, a workflow step, the user) stay "uncommitted"
+    // until sent with approval, so a later task cannot send them with an unlabeled tap.
+    deps.device.on('action', (event: TypingActionEvent) => {
+      this.uncommittedTyping = nextUncommittedTyping(this.uncommittedTyping, event);
     });
     this.recoverInterruptedTasks();
   }
@@ -293,14 +309,13 @@ export class AgentService implements AgentServiceApi {
   async startTask(conversationId: string, request: StartTaskRequest, actor: Actor): Promise<{ message: ChatMessage; task: AgentTask }> {
     const conversation = this.deps.db.get<{ id: string; title: string }>('SELECT id, title FROM conversations WHERE id = ?', conversationId);
     if (!conversation) throw new DeviceError('Conversation not found.', 'not_authorized', 404);
-    if (this.deps.device.isStopLatched) throw new DeviceError('Emergency stop is engaged. Re-arm control first.', 'stop_latched');
-    if (this.active) throw new DeviceError('Another AI task is running. Wait for it or cancel it first.', 'lease_conflict');
-    const lease = this.deps.device.currentLease;
-    if (lease) throw new DeviceError(`${lease.label} is controlling the iPhone.`, 'lease_conflict');
+    this.assertCanStart();
     this.assertScreenAvailable();
 
     const config = this.providerConfig(request.providerId);
-    const provider = await this.factory.build(config);
+    const provider = await this.buildReserved(config);
+    // State may have changed while the provider was being built (Keychain read).
+    this.assertCanStart();
     const settings = this.deps.settings.get();
     const maxActions = Math.min(request.maxActions ?? settings.ai.maxActionsPerTask, settings.ai.maxActionsPerTask);
 
@@ -363,6 +378,24 @@ export class AgentService implements AgentServiceApi {
     return { message, task };
   }
 
+  /** Only one AI task at a time, and never while another controller holds the phone. */
+  private assertCanStart(): void {
+    if (this.deps.device.isStopLatched) throw new DeviceError('Emergency stop is engaged. Re-arm control first.', 'stop_latched');
+    if (this.active || this.starting) throw new DeviceError('Another AI task is running. Wait for it or cancel it first.', 'lease_conflict');
+    const lease = this.deps.device.currentLease;
+    if (lease) throw new DeviceError(`${lease.label} is controlling the iPhone.`, 'lease_conflict');
+  }
+
+  /** Builds the provider while holding the start slot, so overlapping starts cannot both pass the busy check. */
+  private async buildReserved(config: ProviderConfig): Promise<AiProvider> {
+    this.starting = true;
+    try {
+      return await this.factory.build(config);
+    } finally {
+      this.starting = false;
+    }
+  }
+
   private assertScreenAvailable(): void {
     const status = this.deps.device.getStatus();
     if (status.server.state !== 'ready') throw new DeviceError('The Mirroir MCP server is not running.', 'mcp_unavailable', 503);
@@ -382,6 +415,7 @@ export class AgentService implements AgentServiceApi {
     let toolkit: AgentToolkit | null = null;
     let failure: string | null = null;
     let finalStatus: TaskStatus = 'failed';
+    const onEmbeddedAbort = () => controller.abort(new TaskAbortedError('The workflow run was stopped.', 'stopped'));
 
     try {
       // Control lease: an AI task that may act holds exclusive control.
@@ -389,7 +423,9 @@ export class AgentService implements AgentServiceApi {
         active.lease = this.deps.device.currentLease;
         active.borrowedLease = true;
         if (!active.lease || active.lease.id !== embedded.leaseId) throw new DeviceError('The workflow no longer holds control.', 'lease_conflict');
-        embedded.signal.addEventListener('abort', () => controller.abort(new TaskAbortedError('The workflow run was stopped.', 'stopped')), { once: true });
+        // A Stop that arrived while the provider was being built fired before this listener existed.
+        if (embedded.signal.aborted) throw new TaskAbortedError('The workflow run was stopped.', 'stopped');
+        embedded.signal.addEventListener('abort', onEmbeddedAbort, { once: true });
       } else if (mode !== 'observe') {
         active.lease = this.deps.device.acquireLease('ai', `AI task “${truncate(task.instruction, 40)}”`);
       }
@@ -408,6 +444,7 @@ export class AgentService implements AgentServiceApi {
       if (!embedded) active.messageId = this.startAssistantMessage(active, conversationId);
 
       const visionProvider = !config.vision ? await this.visionHelper() : null;
+      throwIfAborted(controller.signal);
       toolkit = new AgentToolkit(
         {
           device: this.deps.device,
@@ -443,10 +480,12 @@ export class AgentService implements AgentServiceApi {
           setAwaitingApproval: (waiting) => this.updateTask(active, { status: waiting ? 'awaiting_approval' : active.paused ? 'paused' : 'running' }),
           waitIfPaused: () => this.waitIfPaused(active),
           onActionsUsed: (count) => this.updateTask(active, { actionsUsed: count }),
+          uncommittedTyping: () => this.uncommittedTyping,
         },
       );
 
       const first = await toolkit.observe({ title: 'Looked at the screen' });
+      throwIfAborted(controller.signal);
       const prompt: ModelContent[] = [
         { type: 'text', text: `${embedded ? '' : this.conversationContext(conversationId, task.id)}Instruction: ${task.instruction}\n\nCurrent screen:` },
         ...first.content,
@@ -471,6 +510,8 @@ export class AgentService implements AgentServiceApi {
         },
       });
       const result = toolkit.result;
+      // Cancelled / stopped before reporting a result: record why, not "stopped without a result".
+      if (!result) throwIfAborted(controller.signal);
       if (result) finalStatus = result.status === 'success' ? 'completed' : 'failed';
       else {
         finalStatus = 'failed';
@@ -495,6 +536,7 @@ export class AgentService implements AgentServiceApi {
       }
     } finally {
       if (deadline) clearTimeout(deadline);
+      if (embedded) embedded.signal.removeEventListener('abort', onEmbeddedAbort);
       if (active.lease && !active.borrowedLease) active.lease.release();
     }
 
@@ -557,10 +599,11 @@ export class AgentService implements AgentServiceApi {
   }
 
   async runEmbeddedTask(options: EmbeddedTaskOptions): Promise<EmbeddedTaskResult> {
-    if (this.active) throw new DeviceError('Another AI task is running.', 'lease_conflict');
+    if (this.active || this.starting) throw new DeviceError('Another AI task is running.', 'lease_conflict');
     this.ensureWorkflowConversation();
     const config = this.providerConfig(null);
-    const provider = await this.factory.build(config);
+    const provider = await this.buildReserved(config);
+    if (this.active) throw new DeviceError('Another AI task is running.', 'lease_conflict');
     const settings = this.deps.settings.get();
     const now = Date.now();
     const task: AgentTask = {
@@ -656,8 +699,35 @@ export class AgentService implements AgentServiceApi {
     return this.active;
   }
 
-  /** Resolves on resume — or on abort, so a stopped/cancelled paused task wakes up and ends. */
-  private waitIfPaused(active: ActiveTask): Promise<void> {
+  /**
+   * Resolves on resume — or on abort, so a stopped/cancelled paused task wakes up and ends.
+   * An embedded task also waits while the workflow's lease is paused (a pause
+   * that arrived before the task existed could not pause the task itself).
+   */
+  private async waitIfPaused(active: ActiveTask): Promise<void> {
+    for (;;) {
+      if (active.controller.signal.aborted) return;
+      if (active.paused) {
+        await this.waitForResume(active);
+        continue;
+      }
+      if (active.borrowedLease && active.lease?.paused) {
+        await new Promise<void>((resolve) => {
+          const timer = setTimeout(done, 200);
+          function done() {
+            clearTimeout(timer);
+            active.controller.signal.removeEventListener('abort', done);
+            resolve();
+          }
+          active.controller.signal.addEventListener('abort', done, { once: true });
+        });
+        continue;
+      }
+      return;
+    }
+  }
+
+  private waitForResume(active: ActiveTask): Promise<void> {
     if (!active.paused || active.controller.signal.aborted) return Promise.resolve();
     return new Promise((resolve) => {
       const onAbort = () => resolve();
@@ -813,6 +883,11 @@ function rowToTask(r: TaskRow): AgentTask {
     outcome: r.outcome_json ? fromJson<AgentTask['outcome']>(r.outcome_json, null) : null,
     error: r.error,
   };
+}
+
+function throwIfAborted(signal: AbortSignal): void {
+  if (!signal.aborted) return;
+  throw signal.reason instanceof Error ? signal.reason : new TaskAbortedError('The task was stopped.', 'cancelled');
 }
 
 function statusSentence(status: TaskStatus): string {

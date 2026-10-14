@@ -4,7 +4,13 @@
 //   threaded anyway): stop > actions > observations > status > live frames.
 // • A control lease prevents manual input and AI/workflow input from
 //   interleaving. Manual input is refused while a task holds the lease,
-//   unless that task is paused.
+//   unless that task is paused; a paused task's input is refused instead
+//   ('lease_paused'), even if it was queued or approved before the pause.
+// • A cancelled / stopped / timed-out task's input is refused ('aborted'):
+//   its signal is checked when the action is queued, when the job starts and
+//   again right before the input call; a queued job is dropped as soon as the
+//   signal fires. A call already sent to Mirroir can only be interrupted by
+//   the emergency stop.
 // • The emergency stop latches: queued actions are rejected, lease holders are
 //   aborted, and an in-flight input call is ended by SIGTERM-ing Mirroir (its
 //   signal handler lifts held touches/keys). Nothing runs until re-armed.
@@ -62,6 +68,7 @@ export class DeviceError extends Error {
       | 'mcp_unavailable'
       | 'screen_capture_unavailable'
       | 'aborted'
+      | 'lease_paused'
       | 'tool_failed',
     readonly status = 409,
   ) {
@@ -117,7 +124,16 @@ export interface ActionContext {
   remoteControlAllowed?: boolean;
   /** Typed text marked sensitive is never written to the activity log, even when text logging is on. */
   sensitive?: boolean;
+  /**
+   * The owning task / run abort signal (cancel, Stop, time limit). An action
+   * is refused if it is aborted before the input call is sent, and a queued
+   * action is removed from the queue as soon as it aborts.
+   */
+  signal?: AbortSignal;
 }
+
+const TASK_CANCELLED_MESSAGE = 'The task was cancelled before this action ran.';
+const LEASE_PAUSED_MESSAGE = 'The task was paused before this action ran; it was not executed.';
 
 const POINTER_KINDS = new Set(['tap', 'double_tap', 'long_press', 'swipe', 'drag']);
 /** Tools that make iPhone Mirroring the frontmost app (focus leaves iPhone AI). */
@@ -140,6 +156,10 @@ export class DeviceController extends EventEmitter {
   private doctorTimer: NodeJS.Timeout | null = null;
   private statusPublishTimer: NodeJS.Timeout | null = null;
   private describeWarm = false;
+  /** True between start() and stopMonitoring(). */
+  private monitoring = false;
+  /** Bumped by start()/stopMonitoring() so a stale in-flight doctor run never re-arms its timer. */
+  private monitorGen = 0;
   private readonly log: Logger;
 
   constructor(
@@ -166,6 +186,9 @@ export class DeviceController extends EventEmitter {
   // ───────────────────────────── lifecycle ─────────────────────────────
 
   start(): void {
+    if (this.monitoring) return; // never run two status/doctor loops
+    this.monitoring = true;
+    const gen = ++this.monitorGen;
     const tick = () => {
       void this.refreshStatus().catch(() => undefined);
     };
@@ -173,16 +196,22 @@ export class DeviceController extends EventEmitter {
     this.statusTimer.unref();
     tick();
     const doctor = () => {
-      void this.refreshPermissions().finally(() => {
-        const allGranted = this.permissions.screenRecording === 'granted' && this.permissions.accessibility === 'granted';
-        this.doctorTimer = setTimeout(doctor, allGranted ? 5 * 60_000 : 15_000);
-        this.doctorTimer.unref();
-      });
+      void this.refreshPermissions()
+        .catch(() => undefined)
+        .finally(() => {
+          // stopMonitoring() (or a later start()) ran while doctor was in flight.
+          if (!this.monitoring || gen !== this.monitorGen) return;
+          const allGranted = this.permissions.screenRecording === 'granted' && this.permissions.accessibility === 'granted';
+          this.doctorTimer = setTimeout(doctor, allGranted ? 5 * 60_000 : 15_000);
+          this.doctorTimer.unref();
+        });
     };
     doctor();
   }
 
   stopMonitoring(): void {
+    this.monitoring = false;
+    this.monitorGen += 1;
     if (this.statusTimer) clearInterval(this.statusTimer);
     if (this.doctorTimer) clearTimeout(this.doctorTimer);
     this.statusTimer = null;
@@ -297,7 +326,7 @@ export class DeviceController extends EventEmitter {
       summary: summaries[to],
     });
     if (to === 'connected' && this.permissions.screenRecording !== 'granted') {
-      void this.refreshPermissions();
+      void this.refreshPermissions().catch(() => undefined);
     }
   }
 
@@ -339,9 +368,54 @@ export class DeviceController extends EventEmitter {
 
   // ───────────────────────────── queue ─────────────────────────────
 
-  private enqueue<T>(label: string, priority: JobPriority, mutating: boolean, run: () => Promise<T>): Promise<T> {
+  /**
+   * `signal` (optional): when it aborts while the job is still waiting, the job
+   * is removed from the queue and rejected with 'aborted'. A job that is
+   * already running re-checks the signal itself.
+   */
+  private enqueue<T>(
+    label: string,
+    priority: JobPriority,
+    mutating: boolean,
+    run: () => Promise<T>,
+    signal?: AbortSignal,
+  ): Promise<T> {
     return new Promise<T>((resolve, reject) => {
-      const job: Job<T> = { id: newId('job'), label, priority, mutating, run, resolve, reject, enqueuedAt: Date.now() };
+      if (signal?.aborted) {
+        reject(new DeviceError(TASK_CANCELLED_MESSAGE, 'aborted'));
+        return;
+      }
+      let onAbort: (() => void) | null = null;
+      const detach = () => {
+        if (onAbort) signal?.removeEventListener('abort', onAbort);
+        onAbort = null;
+      };
+      const job: Job<T> = {
+        id: newId('job'),
+        label,
+        priority,
+        mutating,
+        run,
+        resolve: (value) => {
+          detach();
+          resolve(value);
+        },
+        reject: (err) => {
+          detach();
+          reject(err);
+        },
+        enqueuedAt: Date.now(),
+      };
+      if (signal) {
+        onAbort = () => {
+          const index = this.queue.indexOf(job as Job<unknown>);
+          if (index === -1) return; // running (or settled): the job checks the signal itself
+          this.queue.splice(index, 1);
+          this.publishStatus();
+          job.reject(new DeviceError(TASK_CANCELLED_MESSAGE, 'aborted'));
+        };
+        signal.addEventListener('abort', onAbort, { once: true });
+      }
       // Insert after the last job of equal or higher priority (FIFO within a priority).
       let index = this.queue.length;
       while (index > 0 && this.queue[index - 1]!.priority > priority) index -= 1;
@@ -435,7 +509,9 @@ export class DeviceController extends EventEmitter {
     const inFlight = this.running?.mutating ? this.running.label : null;
     if (inFlight) {
       await this.mirroir.terminate(`Emergency stop during "${inFlight}"`);
-      void this.mirroir.start();
+      void this.mirroir.start().catch((err: unknown) => {
+        this.log.error('Mirroir restart after the emergency stop failed', { error: String(err) });
+      });
     }
     this.emit('stop', { reason, actor });
     this.publishStatus();
@@ -478,7 +554,8 @@ export class DeviceController extends EventEmitter {
     const tool = ACTION_TOOL[action.kind];
     const label = `${ctx.actor}:${tool}`;
     return this.enqueue(label, PRIORITY.action, true, async () => {
-      // Re-check at execution time: the stop may have fired while queued.
+      // Re-check at execution time: the stop, a cancel or a pause may have
+      // happened while queued.
       this.assertAuthorized(action, ctx);
       if (!this.mirroir.isReady()) {
         throw new DeviceError('The Mirroir MCP server is not running.', 'mcp_unavailable', 503);
@@ -493,6 +570,9 @@ export class DeviceController extends EventEmitter {
         );
       }
       if (POINTER_KINDS.has(action.kind)) this.assertGeometry(action, ctx, info.geometry);
+      // Last check before input is sent: the status read above takes time, and
+      // a cancel / pause / stop during it must still prevent the input.
+      this.assertAuthorized(action, ctx);
 
       const args = toolArgs(action);
       const started = Date.now();
@@ -514,17 +594,20 @@ export class DeviceController extends EventEmitter {
       this.recordAction(action, ctx, outcome.ok, durationMs, outcome.text);
       if (!outcome.ok) {
         const kind = classifyInputError(outcome.text);
-        if (kind === 'paused') void this.refreshStatus();
+        // Fire-and-forget: a failing status call (Mirroir crashed, restarting,
+        // timed out) must not become an unhandled rejection.
+        if (kind === 'paused') void this.refreshStatus().catch(() => undefined);
       }
       this.emit('action', { action, ctx, ok: outcome.ok });
       return { ok: outcome.ok, tool, durationMs, message: outcome.text, focusChanged };
-    });
+    }, ctx.signal);
   }
 
   private assertAuthorized(action: DeviceAction, ctx: ActionContext): void {
     if (this.stopLatched) {
       throw new DeviceError('Emergency stop is engaged. Re-arm control to continue.', 'stop_latched');
     }
+    if (ctx.signal?.aborted) throw new DeviceError(TASK_CANCELLED_MESSAGE, 'aborted');
     if (ctx.decision.verdict === 'deny') {
       throw new DeviceError(ctx.decision.reasons[0] ?? 'Action denied by policy.', 'not_authorized', 403);
     }
@@ -543,10 +626,18 @@ export class DeviceController extends EventEmitter {
         throw new DeviceError(`${lease.label} is controlling the iPhone. Pause or stop it to use manual control.`, 'lease_conflict');
       }
     } else if (ctx.actor === 'ai' || ctx.actor === 'workflow') {
+      // Defence in depth: whatever the caller's (possibly stale) decision says,
+      // no AI or workflow input is delivered while the mode is Observe Only.
+      if (this.settings.get().permissions.controlMode === 'observe') {
+        throw new DeviceError('Observe Only mode: AI and automation input is not allowed.', 'not_authorized', 403);
+      }
       if (!lease || lease.id !== ctx.leaseId) {
         throw new DeviceError('This task no longer holds control of the iPhone.', 'lease_conflict');
       }
       if (lease.signal.aborted) throw new DeviceError('The task was stopped.', 'aborted');
+      // A paused task has handed control to the user: its input (even if it
+      // was queued or approved before the pause) must not interleave.
+      if (lease.paused) throw new DeviceError(LEASE_PAUSED_MESSAGE, 'lease_paused');
     } else {
       throw new DeviceError('This actor cannot send input.', 'not_authorized', 403);
     }
@@ -626,10 +717,10 @@ export class DeviceController extends EventEmitter {
     const priority = options.priority === 'observe' ? PRIORITY.observe : PRIORITY.frame;
     if (priority === PRIORITY.frame && this.pendingFrame) return this.pendingFrame;
     const promise = this.enqueue('screenshot', priority, false, async () => {
-      this.assertCaptureAllowed(options.allowResume === true);
+      await this.assertCaptureAllowedLive(options.allowResume === true);
       const settle = Math.max(0, Math.min(options.settleMs ?? 0, 5000));
       const started = Date.now();
-      const out = await this.mirroir.call('screenshot', { settle_ms: settle }, { timeoutMs: 20000 + settle });
+      const out = await this.mirroir.call('screenshot', { settle_ms: settle }, { timeoutMs: this.readTimeout(20000 + settle) });
       if (!out.ok || out.images.length === 0) {
         throw new DeviceError(out.text || 'Screenshot failed.', 'tool_failed', 502);
       }
@@ -642,6 +733,31 @@ export class DeviceController extends EventEmitter {
       return this.pendingFrame;
     }
     return promise;
+  }
+
+  /**
+   * The capture check run inside a queued capture job. When Mirroring is
+   * paused, Mirroir's screenshot / describe_screen press the overlay's
+   * Resume/OK button before capturing, so the paused check must use the LIVE
+   * status (AX only: never resumes, never steals focus), not the 2 s poll's
+   * cached value. Only user-initiated captures (allowResume) may resume.
+   * A few milliseconds remain between Mirroir's status reply and its own
+   * paused check inside the capture tool; Mirroir has no option to close it.
+   */
+  private async assertCaptureAllowedLive(allowResume: boolean): Promise<void> {
+    this.assertCaptureAllowed(allowResume);
+    await this.readLiveStatus();
+    this.assertCaptureAllowed(allowResume);
+  }
+
+  /**
+   * Timeout for read-only calls (screenshots, OCR, health, diagnostics): the
+   * built-in limit, raised to the user's "Request timeout" setting when that
+   * is longer. Input tools keep their short fixed limits (a wedged input call
+   * is terminated to release held input), and status probes stay at 10 s.
+   */
+  private readTimeout(builtInMs: number): number {
+    return Math.max(builtInMs, this.settings.get().connection.requestTimeoutMs);
   }
 
   private assertCaptureAllowed(allowResume: boolean): void {
@@ -691,15 +807,18 @@ export class DeviceController extends EventEmitter {
   async describe(options: { includeImage?: boolean; settleFirst?: boolean; allowResume?: boolean } = {}): Promise<ScreenDescription> {
     this.assertCaptureAllowed(options.allowResume === true);
     return this.enqueue('describe_screen', PRIORITY.observe, false, async () => {
-      this.assertCaptureAllowed(options.allowResume === true);
+      const allowResume = options.allowResume === true;
       if (options.settleFirst) {
-        const settled = await this.mirroir.call('screenshot', { settle_ms: 1500 }, { timeoutMs: 25000 });
+        await this.assertCaptureAllowedLive(allowResume);
+        const settled = await this.mirroir.call('screenshot', { settle_ms: 1500 }, { timeoutMs: this.readTimeout(25000) });
         if (settled.ok && settled.images[0]) this.storeFrame(settled.images[0].data, settled.images[0].mimeType, settled.durationMs);
       }
+      // Re-read after the settle wait too: Mirroring may have paused meanwhile.
+      await this.assertCaptureAllowedLive(allowResume);
       const out = await this.mirroir.call(
         'describe_screen',
         { omit_screenshot: options.includeImage === false },
-        { timeoutMs: this.describeWarm ? 30000 : 90000 },
+        { timeoutMs: this.readTimeout(this.describeWarm ? 30000 : 90000) },
       );
       if (!out.ok) throw new DeviceError(out.text || 'describe_screen failed.', 'tool_failed', 502);
       this.describeWarm = true;
@@ -719,14 +838,16 @@ export class DeviceController extends EventEmitter {
 
   /** Runs check_health on demand (it can activate Mirroring if capture fails, so only when the user asks). */
   async checkHealth(): Promise<ToolCallOutcome> {
-    return this.enqueue('check_health', PRIORITY.observe, false, () => this.mirroir.call('check_health', {}, { timeoutMs: 90000 }));
+    return this.enqueue('check_health', PRIORITY.observe, false, () =>
+      this.mirroir.call('check_health', {}, { timeoutMs: this.readTimeout(90000) }),
+    );
   }
 
   /** Raw read-only tool call for diagnostics (list_targets, get_orientation, list_skills…). */
   async readOnlyCall(tool: string, args: Record<string, unknown> = {}): Promise<ToolCallOutcome> {
     const allowed = new Set(['status', 'get_orientation', 'list_targets', 'list_skills', 'get_skill']);
     if (!allowed.has(tool)) throw new DeviceError(`"${tool}" is not available as a diagnostic call.`, 'not_authorized', 403);
-    return this.enqueue(tool, PRIORITY.status, false, () => this.mirroir.call(tool, args, { timeoutMs: 15000 }));
+    return this.enqueue(tool, PRIORITY.status, false, () => this.mirroir.call(tool, args, { timeoutMs: this.readTimeout(15000) }));
   }
 
   /** Brings iPhone AI back to the front after an input tool activated iPhone Mirroring (desktop app only). */

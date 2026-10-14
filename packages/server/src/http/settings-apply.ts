@@ -1,11 +1,14 @@
 // Applying settings changes made through the API: audit them, and restart
 // Mirroir when its project-local permission/settings files changed (Mirroir
 // reads them once at startup). The restart waits until no device action is
-// executing and no AI task / workflow is actively holding control.
+// executing and — while input stays enabled — no AI task / workflow is
+// actively holding control. It is never skipped while the running Mirroir
+// still has the old configuration.
 
 import { settingsPatchSchema, type Actor, type AppSettings, type ControlMode, type SettingsPatch } from '@iphone-ai/shared';
 
 import type { AppContext } from '../core/services.js';
+import { inputEnabled } from '../mcp/workspace.js';
 
 /**
  * The shared settingsPatchSchema requires every top-level section to be
@@ -47,11 +50,13 @@ const pendingRestarts = new WeakMap<object, Promise<void>>();
 
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
-function busy(ctx: AppContext): boolean {
+function busy(ctx: AppContext, waitForLease = true): boolean {
   const status = ctx.device.getStatus();
   const lease = ctx.device.currentLease;
   const state = ctx.mirroir.info().state;
-  return status.actionInFlight || (lease !== null && !lease.paused) || state === 'starting' || state === 'restarting';
+  return (
+    status.actionInFlight || (waitForLease && lease !== null && !lease.paused) || state === 'starting' || state === 'restarting'
+  );
 }
 
 /**
@@ -64,16 +69,25 @@ export function applyMirroirConfig(ctx: AppContext, reason: string): Promise<voi
   if (existing) return existing;
   const run = (async () => {
     for (let attempt = 0; attempt < 3 && ctx.mirroir.configChanged(); attempt += 1) {
+      // When the new settings turn input off, policy already refuses every
+      // further input, so a task holding control is not waited for: until the
+      // restart, Mirroir still allows the old input tools.
+      const waitForLease = inputEnabled(ctx.settings.get());
       const deadline = Date.now() + IDLE_WAIT_MS;
-      while (busy(ctx) && Date.now() < deadline) await sleep(POLL_MS);
+      while (busy(ctx, waitForLease) && Date.now() < deadline) await sleep(POLL_MS);
       const forced = busy(ctx);
       if (forced) {
-        // Still busy after 30 s: never cut an executing input call short.
-        const inFlightDeadline = Date.now() + IN_FLIGHT_WAIT_MS;
-        while (ctx.device.getStatus().actionInFlight && Date.now() < inFlightDeadline) await sleep(POLL_MS);
-        if (ctx.device.getStatus().actionInFlight) {
-          ctx.log.warn('Mirroir restart for new settings skipped: an action is still executing');
-          return;
+        // Never cut an executing input call short, and never give up either:
+        // wait for it to end. Mirroir's tool timeouts bound this (a timeout
+        // restarts Mirroir, which loads the new configuration by itself).
+        const warnAt = Date.now() + IN_FLIGHT_WAIT_MS;
+        let warned = false;
+        while (ctx.device.getStatus().actionInFlight && ctx.mirroir.configChanged()) {
+          if (!warned && Date.now() >= warnAt) {
+            warned = true;
+            ctx.log.warn('Mirroir restart for new settings is waiting for an executing action to finish');
+          }
+          await sleep(POLL_MS);
         }
       }
       // Not running: the next start writes the new configuration anyway.

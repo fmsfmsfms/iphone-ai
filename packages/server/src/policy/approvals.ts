@@ -21,10 +21,20 @@ export interface ApprovalInput {
   timeoutSec: number;
   /** Called with the request id as soon as the request exists (before the decision). */
   onCreated?: (id: string) => void;
+  /**
+   * What the pending card shows instead of `summary` / `action.args` — e.g. the
+   * actual text about to be typed, so the user can see what they approve.
+   * Live only: never persisted, never written to the activity history, and
+   * replaced by the redacted copy once the request is decided.
+   */
+  preview?: { summary: string; args: Record<string, unknown> } | null;
 }
 
 interface Pending {
+  /** Redacted copy (persisted, audited, published when resolved). */
   request: ApprovalRequest;
+  /** Copy shown while pending (carries the preview, if any). */
+  live: ApprovalRequest;
   resolve: (status: ApprovalStatus) => void;
   timer: NodeJS.Timeout;
 }
@@ -77,8 +87,11 @@ export class ApprovalBroker {
       note: null,
     };
     this.insert(request);
+    const live: ApprovalRequest = input.preview
+      ? { ...request, summary: input.preview.summary, action: { tool: request.action.tool, args: input.preview.args } }
+      : request;
     input.onCreated?.(request.id);
-    this.hub.publish({ type: 'approval_requested', approval: request });
+    this.hub.publish({ type: 'approval_requested', approval: live });
     this.activity.record({
       category: 'approval',
       type: 'approval.requested',
@@ -98,7 +111,7 @@ export class ApprovalBroker {
       timer.unref();
       // Register first so every path (including an already-aborted signal) goes
       // through finish(): row updated, approval_resolved published, audited.
-      this.pending.set(request.id, { request, resolve, timer });
+      this.pending.set(request.id, { request, live, resolve, timer });
       if (signal?.aborted) {
         this.finish(request.id, 'cancelled', 'system', 'Task stopped before approval');
         return;
@@ -124,8 +137,15 @@ export class ApprovalBroker {
     return ids.length;
   }
 
+  /** Cancels the pending requests that match (e.g. AI/workflow requests when control is lowered to Observe Only). */
+  cancelWhere(predicate: (request: ApprovalRequest) => boolean, reason: string): number {
+    const ids = [...this.pending.values()].filter((p) => predicate(p.request)).map((p) => p.request.id);
+    for (const id of ids) this.finish(id, 'cancelled', 'system', reason);
+    return ids.length;
+  }
+
   listPending(): ApprovalRequest[] {
-    return [...this.pending.values()].map((p) => p.request);
+    return [...this.pending.values()].map((p) => p.live);
   }
 
   recent(limit = 100): ApprovalRequest[] {
