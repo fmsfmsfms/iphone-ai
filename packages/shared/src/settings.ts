@@ -30,6 +30,14 @@ export interface ConnectionSettings {
     idleAfterMs: number;
     /** Stop polling entirely when no viewer is visible. */
     pauseWhenHidden: boolean;
+    /**
+     * Stream the iPhone Mirroring window with the bundled ScreenCaptureKit helper
+     * (JPEG frames over /ws/screen) instead of polling Mirroir screenshots, when
+     * the helper is available. Polling takes over automatically if it fails.
+     */
+    liveCapture: boolean;
+    /** Frames per second requested from the live capture helper (5–60). */
+    liveFps: number;
   };
 }
 

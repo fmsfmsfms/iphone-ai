@@ -106,6 +106,22 @@ describe('AI and workflow actors', () => {
     expect(evaluate({ permissions: permissions({ aiAllowedTools: ['TAP'] }) }).verdict).toBe('allow');
   });
 
+  it('governs the AI finger flick (a drag standing in for a swipe) by the "swipe" entry', () => {
+    const flick: DeviceAction = { kind: 'drag', fromX: 205, fromY: 629, toX: 205, toY: 269, durationMs: 200, asSwipe: true };
+    const plainDrag: DeviceAction = { kind: 'drag', fromX: 205, fromY: 629, toX: 205, toY: 269, durationMs: 200 };
+    // Default allowed tools: swipe yes, drag no.
+    expect(evaluate({ action: flick, target: null }).verdict).toBe('allow');
+    expect(evaluate({ action: plainDrag, target: null }).rules).toEqual(['tool.not_allowed']);
+    // Allowing only "drag" does not enable flicks, and removing "swipe" blocks them.
+    const dragOnly = evaluate({ permissions: permissions({ aiAllowedTools: ['tap', 'drag'] }), action: flick, target: null });
+    expect(dragOnly.rules).toEqual(['tool.not_allowed']);
+    expect(dragOnly.reasons[0]).toContain('"swipe"');
+    expect(evaluate({ permissions: permissions({ aiAllowedTools: ['tap', 'drag'] }), action: plainDrag, target: null }).verdict).toBe('allow');
+    // Every other rule still applies (mode, screen checks).
+    expect(evaluate({ mode: 'observe', action: flick }).rules).toEqual(['mode.observe']);
+    expect(evaluate({ mode: 'assisted', action: flick, target: null }).rules).toEqual(['mode.assisted']);
+  });
+
   it('allows a plain supervised tap on a safe label', () => {
     expect(evaluate()).toEqual({ verdict: 'allow', risk: 'low', reasons: [], rules: [] });
     expect(evaluate({ actor: 'workflow', label: 'Wi-Fi' }).verdict).toBe('allow');

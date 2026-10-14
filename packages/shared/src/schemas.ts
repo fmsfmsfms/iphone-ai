@@ -28,6 +28,7 @@ export const deviceActionSchema = z.discriminatedUnion('kind', [
     toX: point,
     toY: point,
     durationMs: duration.optional(),
+    asSwipe: z.literal(true).optional(),
   }),
   z.object({ kind: z.literal('type_text'), text: z.string().min(1).max(2000) }),
   z.object({
@@ -180,6 +181,10 @@ export const settingsPatchSchema = z
           idleFps: z.number().min(0).max(2),
           idleAfterMs: z.number().int().min(5000).max(3600000),
           pauseWhenHidden: z.boolean(),
+          // Optional so older clients that send the four polling fields keep working
+          // (the backend keeps the current values for omitted keys).
+          liveCapture: z.boolean().optional(),
+          liveFps: z.number().int().min(5).max(60).optional(),
         }),
       })
       .partial(),

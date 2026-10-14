@@ -85,6 +85,9 @@ fn create_main_window(app: &AppHandle, backend: &Arc<Backend>) -> tauri::Result<
         .visible(false)
         // Let the page receive HTML5 drag-and-drop (e.g. importing a workflow file).
         .disable_drag_drop_handler()
+        // Every input action leaves iPhone Mirroring frontmost; the first click back on this
+        // window must reach the live viewer instead of only activating the app.
+        .accept_first_mouse(true)
         .on_navigation(move |url| allow_navigation(&nav, url))
         .on_new_window(move |url, _features| {
             // target=_blank / window.open: external links go to the default browser.

@@ -164,14 +164,14 @@ export class WorkflowRecorder {
       case 'double_tap':
         this.notes.push(`A double-tap at (${Math.round(action.x)}, ${Math.round(action.y)}) was not recorded (workflows have no double-tap step).`);
         return null;
-      case 'swipe': {
+      // The Live viewer sends finger drags (and flicks) as Mirroir drags; both
+      // become workflow swipe steps, which replay as finger flicks.
+      case 'swipe':
+      case 'drag': {
         const g = this.device.geometry;
         const { direction, distance } = classifySwipe(action.fromX, action.fromY, action.toX, action.toY, g?.widthPt ?? null, g?.heightPt ?? null);
         return { id: this.nextId(), type: 'swipe', direction, distance };
       }
-      case 'drag':
-        this.notes.push('A drag was not recorded (workflows have no drag step).');
-        return null;
       case 'type_text': {
         const texts = (this.snapshot?.elements ?? []).map((e) => e.label);
         // Without any screen information we cannot tell, so treat the text as sensitive.

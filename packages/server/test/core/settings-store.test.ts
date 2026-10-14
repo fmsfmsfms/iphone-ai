@@ -64,12 +64,37 @@ describe('update', () => {
     expect(seen).toHaveLength(1);
   });
 
-  it('replaces nested objects such as the screenshot policy wholesale', () => {
+  // Changed with live capture: the screenshot policy gained liveCapture/liveFps.
+  // It used to be replaced wholesale; it now merges, so a client that still
+  // sends only the four polling fields does not silently reset the live keys.
+  it('merges a patched screenshot policy over the current one (older clients omit the live keys)', () => {
+    ctx.settings.update({ connection: { screenshot: { ...ctx.settings.get().connection.screenshot, liveCapture: false, liveFps: 20 } } });
     const next = ctx.settings.update({
-      connection: { screenshot: { activeFps: 4, idleFps: 0.5, idleAfterMs: 10000, pauseWhenHidden: false } },
+      connection: { screenshot: { activeFps: 4, idleFps: 0.5, idleAfterMs: 10000, pauseWhenHidden: false } as never },
     });
-    expect(next.connection.screenshot).toEqual({ activeFps: 4, idleFps: 0.5, idleAfterMs: 10000, pauseWhenHidden: false });
+    expect(next.connection.screenshot).toEqual({
+      activeFps: 4,
+      idleFps: 0.5,
+      idleAfterMs: 10000,
+      pauseWhenHidden: false,
+      liveCapture: false,
+      liveFps: 20,
+    });
     expect(next.connection.target).toBe('iphone');
+  });
+
+  it('defaults to live capture at 30 fps and validates the live frame rate (5–60)', () => {
+    expect(ctx.settings.get().connection.screenshot).toMatchObject({ liveCapture: true, liveFps: 30 });
+    const screenshot = ctx.settings.get().connection.screenshot;
+    expect(() => ctx.settings.update({ connection: { screenshot: { ...screenshot, liveFps: 61 } } })).toThrow(ZodError);
+    expect(() => ctx.settings.update({ connection: { screenshot: { ...screenshot, liveFps: 4 } } })).toThrow(ZodError);
+    expect(() => ctx.settings.update({ connection: { screenshot: { ...screenshot, liveFps: 12.5 } } })).toThrow(ZodError);
+    expect(ctx.settings.update({ connection: { screenshot: { ...screenshot, liveFps: 60 } } }).connection.screenshot.liveFps).toBe(60);
+  });
+
+  it('uses the faster observation defaults (settle 450 ms, request timeout 30 s)', () => {
+    expect(ctx.settings.get().ai.settleDelayMs).toBe(450);
+    expect(ctx.settings.get().connection.requestTimeoutMs).toBe(30000);
   });
 
   it('rejects invalid values, unknown sections and protected fields', () => {
@@ -155,6 +180,58 @@ describe('persistence', () => {
     expect(loaded.remote.enabled).toBe(false);
     expect(loaded.privacy.cloudDisclosureAcknowledged).toBe(false);
     expect(loaded.advanced).toEqual({ debugLogging: false, mcpTrace: false });
+  });
+
+  it('fills the live-capture keys into a screenshot policy stored by an older version', () => {
+    const old = createDefaultSettings() as unknown as { connection: { screenshot: Record<string, unknown> } };
+    old.connection.screenshot = { activeFps: 3, idleFps: 0.5, idleAfterMs: 20000, pauseWhenHidden: false };
+    ctx.db.run("UPDATE settings SET value = ? WHERE key = 'app'", JSON.stringify(old));
+    expect(new SettingsStore(ctx.db).get().connection.screenshot).toEqual({
+      activeFps: 3,
+      idleFps: 0.5,
+      idleAfterMs: 20000,
+      pauseWhenHidden: false,
+      liveCapture: true,
+      liveFps: 30,
+    });
+  });
+
+  it('migrates users still on the old defaults (settle 900 → 450 ms, timeout 60 → 30 s) once, keeping custom values', () => {
+    const storeOld = (settleDelayMs: number, requestTimeoutMs: number) => {
+      const old = createDefaultSettings();
+      old.ai.settleDelayMs = settleDelayMs;
+      old.connection.requestTimeoutMs = requestTimeoutMs;
+      ctx.db.run("UPDATE settings SET value = ? WHERE key = 'app'", JSON.stringify(old));
+      // A database written before the migration existed.
+      ctx.db.run("DELETE FROM settings WHERE key = 'migrations'");
+    };
+
+    storeOld(900, 60000);
+    const migrated = new SettingsStore(ctx.db).get();
+    expect(migrated.ai.settleDelayMs).toBe(450);
+    expect(migrated.connection.requestTimeoutMs).toBe(30000);
+    // Persisted, not only applied in memory.
+    expect(storedRow(ctx.db).ai.settleDelayMs).toBe(450);
+    expect(storedRow(ctx.db).connection.requestTimeoutMs).toBe(30000);
+
+    storeOld(1200, 90000);
+    const custom = new SettingsStore(ctx.db).get();
+    expect(custom.ai.settleDelayMs).toBe(1200);
+    expect(custom.connection.requestTimeoutMs).toBe(90000);
+
+    // Once migrated, choosing the old values again sticks across restarts.
+    const store = new SettingsStore(ctx.db);
+    store.update({ ai: { settleDelayMs: 900 }, connection: { requestTimeoutMs: 60000 } });
+    const reloaded = new SettingsStore(ctx.db).get();
+    expect(reloaded.ai.settleDelayMs).toBe(900);
+    expect(reloaded.connection.requestTimeoutMs).toBe(60000);
+  });
+
+  it('never migrates a fresh install later (the old values chosen on purpose stick)', () => {
+    ctx.settings.update({ ai: { settleDelayMs: 900 }, connection: { requestTimeoutMs: 60000 } });
+    const reloaded = new SettingsStore(ctx.db).get();
+    expect(reloaded.ai.settleDelayMs).toBe(900);
+    expect(reloaded.connection.requestTimeoutMs).toBe(60000);
   });
 
   it('falls back to defaults when the stored row is not valid JSON', () => {

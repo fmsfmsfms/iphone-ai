@@ -26,6 +26,7 @@ import { sendManualAction } from '../../components/phone/phone-actions';
 import { StatusChip } from '../../components/StatusChip';
 import { manualInputAvailability, mcpChip, mirroringChip, missingPermissions } from '../../lib/device-state';
 import { useI18n } from '../../lib/i18n';
+import { useLiveScreen } from '../../lib/live-screen';
 import { useActiveRun, useActiveTask, useAppStore } from '../../state/store';
 import type { useManualControl } from './useManualControl';
 
@@ -93,6 +94,7 @@ export function DevicePanel({ manual, typeFieldRef }: DevicePanelProps) {
   const session = useAppStore((s) => s.session);
   const stream = useAppStore((s) => s.stream);
   const frame = useAppStore((s) => s.frame);
+  const live = useLiveScreen();
   const activeTask = useActiveTask();
   const activeRun = useActiveRun();
   const [pending, setPending] = useState<string | null>(null);
@@ -120,6 +122,19 @@ export function DevicePanel({ manual, typeFieldRef }: DevicePanelProps) {
   const mir = mirroringChip(status?.mirroring.state);
   const fps = (v: number) => t('live.device.fps', { value: formatNumber(v, { maximumFractionDigits: 1, minimumFractionDigits: 1 }) });
   const missing = missingPermissions(status);
+  // The scale of the picture on screen: live frames may be downscaled from the 2× backing scale.
+  const shown = live.flowing && live.view ? live.view.meta : frame;
+  const liveCaptureOn = settings?.connection.screenshot.liveCapture ?? true;
+  const liveValue = live.flowing
+    ? t('live.device.liveValue', {
+        fps: formatNumber(live.fps, { maximumFractionDigits: live.fps < 10 ? 1 : 0 }),
+        latency: formatNumber(Math.round(live.latencyMs ?? 0)),
+      })
+    : !liveCaptureOn
+      ? t('live.device.liveOff')
+      : stream?.liveAvailable === false
+        ? t('live.device.liveUnavailable')
+        : t('live.device.liveInactive');
 
   const launch = async () => {
     const name = appName.trim();
@@ -157,11 +172,11 @@ export function DevicePanel({ manual, typeFieldRef }: DevicePanelProps) {
             {
               label: t('live.device.scale'),
               value:
-                frame?.pxPerPt != null
+                shown?.pxPerPt != null
                   ? t('live.device.scaleValue', {
-                      value: formatNumber(frame.pxPerPt, { maximumFractionDigits: 2 }),
-                      width: frame.widthPx,
-                      height: frame.heightPx,
+                      value: formatNumber(shown.pxPerPt, { maximumFractionDigits: 2 }),
+                      width: shown.widthPx,
+                      height: shown.heightPx,
                     })
                   : t('live.device.unknown'),
             },
@@ -169,10 +184,19 @@ export function DevicePanel({ manual, typeFieldRef }: DevicePanelProps) {
         />
       </Section>
 
-      <Section title={t('live.device.updates')} description={t('live.device.updatesNote')}>
+      <Section title={t('live.device.updates')} description={live.flowing ? t('live.device.updatesLiveNote') : t('live.device.updatesNote')}>
         <KeyValueList
           dense
           items={[
+            {
+              label: t('live.device.mode'),
+              value: stream?.mode === 'live-screencapturekit' ? t('live.device.modeLive') : t('live.device.modePolling'),
+            },
+            {
+              label: t('live.device.liveView'),
+              value: live.flowing ? <span className="text-success">{liveValue}</span> : liveValue,
+              hint: !live.flowing && liveCaptureOn && stream?.liveError ? stream.liveError : undefined,
+            },
             { label: t('live.device.targetFps'), value: stream ? fps(stream.targetFps) : '—' },
             {
               label: t('live.device.measuredFps'),

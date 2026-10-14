@@ -24,6 +24,7 @@ import type { ScreenshotStore } from '../ai/screenshots.js';
 import type { AiProvider } from '../ai/types.js';
 import type { Database } from '../db/database.js';
 import type { DeviceController } from '../device/device-controller.js';
+import type { LiveCapture } from '../device/live-capture.js';
 import type { ScreenStream } from '../device/screen-stream.js';
 import type { MirroirManager } from '../mcp/mirroir-manager.js';
 import type { ApprovalBroker } from '../policy/approvals.js';
@@ -141,6 +142,8 @@ export interface AppContext {
   mirroir: MirroirManager;
   device: DeviceController;
   stream: ScreenStream;
+  /** ScreenCaptureKit live frames (relayed on /ws/screen); unavailable without the capture helper. */
+  live: LiveCapture;
   approvals: ApprovalBroker;
   screenshots: ScreenshotStore;
   agents: AgentServiceApi;

@@ -1,7 +1,10 @@
-// The phone screen: polled screenshots in a device frame that keeps the real
-// aspect ratio (portrait or landscape), double-buffered so frames swap without
-// flicker, with honest stream numbers and — when manual control is allowed —
-// click / drag input mapped to Mirroir window points.
+// The phone screen in a device frame that keeps the real aspect ratio
+// (portrait or landscape). Live ScreenCaptureKit frames (/ws/screen) are drawn
+// on a canvas while they flow; otherwise the polled screenshots show,
+// double-buffered so frames swap without flicker. The status line says which
+// one is on screen, with honest numbers, and — when manual control is allowed —
+// clicks, finger-like drags and arrow-key flicks are mapped to Mirroir window
+// points from the displayed frame's own metadata.
 
 import {
   ArrowDownToLine,
@@ -21,6 +24,7 @@ import { touchAvailability } from '../../lib/device-state';
 import { useLatestFrame, type LoadedFrame } from '../../lib/frames';
 import { fitAspect } from '../../lib/geometry';
 import { useI18n } from '../../lib/i18n';
+import { chooseFrameSource, useLiveScreen } from '../../lib/live-screen';
 import { readJson, STORAGE_KEYS, writeJson } from '../../lib/storage';
 import {
   registerViewer,
@@ -32,6 +36,7 @@ import {
 import { IconButton } from '../IconButton';
 import { RelativeTime, useNow } from '../RelativeTime';
 import { StatusChip } from '../StatusChip';
+import { LiveCanvas } from './LiveCanvas';
 import { openMirroring, useScreenRefresh } from './phone-actions';
 import { TouchSurface, type TouchMode } from './TouchSurface';
 import { viewerBlock, ViewerOverlay } from './ViewerOverlay';
@@ -112,9 +117,11 @@ export function PhoneViewer({ interactive = false, toolbar = true, variant = 'fu
   const activeRun = useActiveRun();
   const canControl = useCanControl();
   const latest = useLatestFrame();
+  const live = useLiveScreen();
   const { layers, front, onLoad } = useDoubleBuffer(latest);
   const imgA = useRef<HTMLImageElement>(null);
   const imgB = useRef<HTMLImageElement>(null);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
   const [areaRef, area] = useElementSize<HTMLDivElement>();
   const [enlarged, setEnlarged] = useState(false);
   const [mode, setMode] = useState<TouchMode>(() => {
@@ -128,9 +135,21 @@ export function PhoneViewer({ interactive = false, toolbar = true, variant = 'fu
   useEffect(() => registerViewer(), []);
   useEffect(() => writeJson(STORAGE_KEYS.touchMode, mode), [mode]);
 
-  // Meta for the displayed image: prefer the announcement matching its seq.
-  const meta = front?.meta ?? (announced && front && announced.seq === front.seq ? announced : null);
-  const natural = front ? { width: front.naturalWidth, height: front.naturalHeight } : null;
+  // Meta for the polled screenshot: prefer the announcement matching its seq.
+  const polledMeta = front?.meta ?? (announced && front && announced.seq === front.seq ? announced : null);
+  // Live frames while they flow; the polled screenshot otherwise (unless the last live frame is newer).
+  const source = chooseFrameSource(
+    { flowing: live.flowing, capturedAt: live.lastCapturedAt, hasFrame: live.view !== null },
+    { capturedAt: polledMeta?.capturedAt ?? null, hasFrame: front !== null },
+  );
+  const liveView = source === 'live' ? live.view : null;
+  // Touches are mapped with the displayed frame's own metadata and pixel size.
+  const meta = liveView ? liveView.meta : polledMeta;
+  const natural = liveView
+    ? { width: liveView.width, height: liveView.height }
+    : front
+      ? { width: front.naturalWidth, height: front.naturalHeight }
+      : null;
 
   const aspect = useMemo(() => {
     if (natural && natural.width > 0 && natural.height > 0) return natural.width / natural.height;
@@ -140,7 +159,7 @@ export function PhoneViewer({ interactive = false, toolbar = true, variant = 'fu
     return DEFAULT_ASPECT;
   }, [natural?.width, natural?.height, announced, status?.mirroring.geometry]);
 
-  const block = viewerBlock(status, stream, Boolean(front));
+  const block = viewerBlock(status, stream, Boolean(front || live.view));
   const touch = touchAvailability({ status, settings, session, activeTask, activeRun }, meta, natural);
   const touchEnabled = interactive && canControl && !block && touch.allowed && Boolean(meta && natural);
 
@@ -157,22 +176,35 @@ export function PhoneViewer({ interactive = false, toolbar = true, variant = 'fu
   };
 
   // Client clock (when this UI received the frame): immune to clock skew on remote viewers.
-  const lastFrameAt = front?.loadedAt ?? null;
+  const lastFrameAt = liveView ? live.lastFrameAt : (front?.loadedAt ?? null);
   const stale = Boolean(!block && stream?.running && lastFrameAt && now - lastFrameAt > STALE_AFTER_MS);
   const lastFocusSteal = status?.lastFocusSteal ?? null;
   const showFocusChip = Boolean(
     interactive && lastFocusSteal && now - lastFocusSteal < FOCUS_NOTICE_MS && focusToastAt !== lastFocusSteal,
   );
 
-  const download = () => {
-    if (!front) return;
+  const save = (href: string, capturedAt: number) => {
     const a = document.createElement('a');
-    a.href = front.url;
-    const stamp = new Date(front.meta?.capturedAt ?? front.loadedAt).toISOString().replace(/[:.]/g, '-');
-    a.download = `iphone-${stamp}.png`;
+    a.href = href;
+    a.download = `iphone-${new Date(capturedAt).toISOString().replace(/[:.]/g, '-')}.png`;
     document.body.appendChild(a);
     a.click();
     a.remove();
+  };
+
+  const download = () => {
+    const canvas = canvasRef.current;
+    if (liveView && canvas) {
+      const capturedAt = live.lastCapturedAt ?? Date.now();
+      canvas.toBlob((blob) => {
+        if (!blob) return;
+        const url = URL.createObjectURL(blob);
+        save(url, capturedAt);
+        setTimeout(() => URL.revokeObjectURL(url), 10_000);
+      }, 'image/png');
+      return;
+    }
+    if (front) save(front.url, front.meta?.capturedAt ?? front.loadedAt);
   };
 
   const open = async () => {
@@ -184,7 +216,24 @@ export function PhoneViewer({ interactive = false, toolbar = true, variant = 'fu
     }
   };
 
+  // Say "Live" only while live frames actually arrive here; otherwise the polling numbers.
+  const statsLabel = live.flowing
+    ? t('viewer.stats.live', {
+        fps: formatNumber(live.fps, { maximumFractionDigits: live.fps < 10 ? 1 : 0 }),
+        latency: formatNumber(Math.round(live.latencyMs ?? 0)),
+      })
+    : stream?.running
+      ? t('viewer.stats.polling', {
+          fps: formatNumber(stream.measuredFps, { maximumFractionDigits: 1, minimumFractionDigits: 1 }),
+          latency: formatNumber(Math.round(stream.avgLatencyMs)),
+        })
+      : stream?.pausedReason
+        ? t('viewer.stats.paused', { reason: stream.pausedReason })
+        : t('viewer.stats.idle');
+
   const frontRef = layers.front === 'a' ? imgA : imgB;
+  const pictureRef = liveView ? canvasRef : frontRef;
+  const dimmed = block ? 'opacity-25 blur-sm' : 'opacity-100';
 
   return (
     <div className={['flex h-full min-h-0 w-full flex-col', className ?? ''].join(' ')}>
@@ -247,7 +296,7 @@ export function PhoneViewer({ interactive = false, toolbar = true, variant = 'fu
               label={t('viewer.download')}
               icon={<ArrowDownToLine />}
               onPress={download}
-              isDisabled={!front}
+              isDisabled={!front && !liveView}
               disabledReason={t('viewer.noFrameYet')}
             />
             {allowEnlarge ? (
@@ -272,30 +321,37 @@ export function PhoneViewer({ interactive = false, toolbar = true, variant = 'fu
               className="phone-screen h-full w-full"
               style={{ borderRadius: screenRadius }}
               data-touch-enabled={touchEnabled || undefined}
+              data-frame-source={liveView ? 'live' : front ? 'polled' : undefined}
             >
               {(['a', 'b'] as const).map((layer) => {
                 const frame = layers[layer];
                 if (!frame) return null;
-                const isFront = layers.front === layer;
+                const shown = layers.front === layer && !liveView;
                 return (
                   <img
                     key={layer}
                     ref={layer === 'a' ? imgA : imgB}
                     src={frame.url}
-                    alt={isFront ? t('viewer.imageAlt') : ''}
-                    aria-hidden={!isFront}
+                    alt={shown ? t('viewer.imageAlt') : ''}
+                    aria-hidden={!shown}
                     draggable={false}
                     onLoad={() => onLoad(layer)}
-                    className={[
-                      'absolute inset-0 h-full w-full object-contain',
-                      isFront ? (block ? 'opacity-25 blur-sm' : 'opacity-100') : 'opacity-0',
-                    ].join(' ')}
+                    className={['absolute inset-0 h-full w-full object-contain', shown ? dimmed : 'opacity-0'].join(' ')}
                   />
                 );
               })}
 
+              {live.view ? (
+                <LiveCanvas
+                  canvasRef={canvasRef}
+                  label={t('viewer.imageAlt')}
+                  hidden={!liveView}
+                  className={['absolute inset-0 h-full w-full object-contain', liveView ? dimmed : 'opacity-0'].join(' ')}
+                />
+              ) : null}
+
               {touchEnabled && meta && natural ? (
-                <TouchSurface imageRef={frontRef} meta={meta} natural={natural} mode={mode} />
+                <TouchSurface imageRef={pictureRef} meta={meta} natural={natural} mode={mode} keyboardFlicks />
               ) : null}
 
               {block ? (
@@ -318,15 +374,8 @@ export function PhoneViewer({ interactive = false, toolbar = true, variant = 'fu
       </div>
 
       <div className={['flex flex-wrap items-center justify-center gap-x-2 gap-y-1 px-2 text-center text-muted', compact ? 'pt-2 text-[11px]' : 'pt-3 text-xs'].join(' ')}>
-        <span className="tabular-nums">
-          {stream?.running
-            ? t('viewer.stats.polling', {
-                fps: formatNumber(stream.measuredFps, { maximumFractionDigits: 1, minimumFractionDigits: 1 }),
-                latency: formatNumber(Math.round(stream.avgLatencyMs)),
-              })
-            : stream?.pausedReason
-              ? t('viewer.stats.paused', { reason: stream.pausedReason })
-              : t('viewer.stats.idle')}
+        <span className="tabular-nums" data-testid="viewer-stats">
+          {statsLabel}
         </span>
         {lastFrameAt ? (
           <span>

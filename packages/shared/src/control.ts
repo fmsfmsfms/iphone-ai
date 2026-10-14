@@ -17,7 +17,22 @@ export type DeviceAction =
   | { kind: 'double_tap'; x: number; y: number }
   | { kind: 'long_press'; x: number; y: number; durationMs?: number }
   | { kind: 'swipe'; fromX: number; fromY: number; toX: number; toY: number; durationMs?: number }
-  | { kind: 'drag'; fromX: number; fromY: number; toX: number; toY: number; durationMs?: number }
+  | {
+      kind: 'drag';
+      fromX: number;
+      fromY: number;
+      toX: number;
+      toY: number;
+      durationMs?: number;
+      /**
+       * A finger flick standing in for a swipe (the AI "swipe" tool): Mirroir's
+       * `drag` is a real touch drag, which iOS treats as a flick when it is
+       * fast, unlike `swipe` (a synthesized trackpad scroll with a momentum
+       * tail). The policy checks it against the "swipe" entry of the allowed
+       * AI tools.
+       */
+      asSwipe?: true;
+    }
   | { kind: 'type_text'; text: string }
   | { kind: 'press_key'; key: string; modifiers?: string[] }
   | { kind: 'press_home' }

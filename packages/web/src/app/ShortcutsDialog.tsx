@@ -27,6 +27,9 @@ const GROUPS: { titleKey: string; rows: ShortcutRow[] }[] = [
       { keys: [['R']], labelKey: 'shortcuts.refresh' },
       { keys: [['M']], labelKey: 'shortcuts.manual' },
       { keys: [['T']], labelKey: 'shortcuts.type' },
+      { keys: [['up']], labelKey: 'shortcuts.flickUp' },
+      { keys: [['down']], labelKey: 'shortcuts.flickDown' },
+      { keys: [['left'], ['right']], labelKey: 'shortcuts.flickSideways' },
     ],
   },
   {

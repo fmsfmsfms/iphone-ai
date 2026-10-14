@@ -42,6 +42,33 @@ describe('AI task loop (scripted model × mock Mirroir)', () => {
       expect(messages.map((m) => m.role)).toEqual(['user', 'assistant']);
     });
 
+    it('swipes with a finger flick (Mirroir drag, 200 ms), never the scroll-wheel swipe, and repeats with one observation', async () => {
+      h.setScript(({ turn }) => {
+        if (turn === 0) return { toolCalls: [call('swipe', { direction: 'up', reason: 'scroll down' })] };
+        if (turn === 1) return { toolCalls: [call('swipe', { direction: 'up', times: 2, interval_ms: 300, reason: 'page twice' })] };
+        return { toolCalls: [call('finish_task', { status: 'failed', summary: 'Scrolled.' })] };
+      });
+      const conversation = h.agents.createConversation();
+      const { task } = await h.agents.startTask(conversation.id, { text: 'Scroll down.' }, 'user');
+      await waitForTask(h, task.id);
+      const calls = h.calls().filter((c) => c.name);
+      expect(calls.some((c) => c.name === 'swipe')).toBe(false);
+      const drags = calls.filter((c) => c.name === 'drag');
+      expect(drags).toHaveLength(3);
+      for (const drag of drags) {
+        expect(drag.args).toEqual({ from_x: 205, from_y: 629, to_x: 205, to_y: 269, duration_ms: 200, cursor_mode: 'preserving' });
+      }
+      // One observation after the repeated flicks: no describe_screen between the last two drags.
+      const names = calls.map((c) => c.name);
+      const last = names.lastIndexOf('drag');
+      const previous = names.lastIndexOf('drag', last - 1);
+      expect(names.slice(previous + 1, last)).not.toContain('describe_screen');
+      expect(names.slice(last + 1)).toContain('describe_screen');
+      const audited = h.activity.query({ categories: ['ai'] }).filter((e) => e.tool === 'drag');
+      expect(audited).toHaveLength(3);
+      expect(audited[0]!.summary).toMatch(/^Flick from \(205, 629\) to \(205, 269\)/);
+    });
+
     it('marks success as NOT verified when the evidence is not on the final screen', async () => {
       h.setScript(({ turn }) =>
         turn === 0
@@ -177,7 +204,8 @@ describe('AI task loop (scripted model × mock Mirroir)', () => {
       const done = await waitForTask(h, task.id);
       expect(h.provider!.seenTools[0]).toEqual(['observe_screen', 'wait', 'finish_task']);
       expect(done.status).toBe('completed');
-      const inputTools = ['tap', 'swipe', 'type_text', 'launch_app', 'press_home', 'press_key'];
+      // The AI swipe tool sends Mirroir `drag` (a finger flick), so drag counts as input too.
+      const inputTools = ['tap', 'swipe', 'drag', 'type_text', 'launch_app', 'press_home', 'press_key'];
       expect(h.calls().some((c) => inputTools.includes(c.name ?? ''))).toBe(false);
       expect(h.device.currentLease).toBeNull();
     });

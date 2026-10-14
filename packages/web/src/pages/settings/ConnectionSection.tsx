@@ -1,5 +1,6 @@
-// iPhone Connection: Mirroir program and target, request timeout, screenshot
-// polling, Mirroir doctor results, macOS permissions and connection actions.
+// iPhone Connection: Mirroir program and target, request timeout, live view
+// (ScreenCaptureKit) and screenshot polling, Mirroir doctor results, macOS
+// permissions and connection actions.
 
 import {
   ArrowsRotateRight,
@@ -12,7 +13,7 @@ import {
   Stethoscope,
   TriangleExclamationFill,
 } from '@gravity-ui/icons';
-import type { HealthCheckItem, PermissionState } from '@iphone-ai/shared';
+import { DEFAULT_LIVE_FPS, type HealthCheckItem, type PermissionState } from '@iphone-ai/shared';
 import { Button, Skeleton, Spinner } from '@heroui/react';
 import { useCallback, useEffect, useState, type ReactNode } from 'react';
 
@@ -24,7 +25,7 @@ import { StatusChip } from '../../components/StatusChip';
 import { api, errorMessage, type DoctorCheck, type HealthCheckResponse, type SettingsPane } from '../../lib/api';
 import { mcpChip, mirroringChip } from '../../lib/device-state';
 import { useI18n } from '../../lib/i18n';
-import { applyStatus, notify, notifyError, refreshConnection, restartMcp, useStatus } from '../../state/store';
+import { applyStatus, notify, notifyError, refreshConnection, restartMcp, useStatus, useStream } from '../../state/store';
 import { errorFor } from './helpers';
 import { Notice, NumberRow, Rows, SaveBar, SettingRow, SwitchRow, TextInput, useEditable } from './fields';
 import { SectionFrame, useSectionAccess } from './SectionFrame';
@@ -337,11 +338,18 @@ function StatusPanel() {
 export function ConnectionSection() {
   const { t } = useI18n();
   const status = useStatus();
+  const stream = useStream();
   const access = useSectionAccess('local');
   const form = useSectionForm('connection');
   const draft = form.draft;
   if (!draft) return null;
-  const shot = draft.screenshot;
+  // Settings saved before live capture existed may lack its keys; the defaults apply until changed.
+  const shot = {
+    ...draft.screenshot,
+    liveCapture: draft.screenshot.liveCapture ?? true,
+    liveFps: draft.screenshot.liveFps ?? DEFAULT_LIVE_FPS,
+  };
+  const liveProblem = shot.liveCapture && stream && !stream.liveAvailable ? stream.liveError : null;
   const binaryChanged = Boolean(form.patch.mirroirBinaryPath !== undefined || form.patch.target !== undefined);
 
   return (
@@ -406,6 +414,45 @@ export function ConnectionSection() {
         <Notice tone="default" className="mb-4">
           {t('settings.connection.polling.honest')}
         </Notice>
+        <Rows>
+          <SwitchRow
+            label={t('settings.connection.live.label')}
+            description={
+              <>
+                {t('settings.connection.live.description')}
+                {liveProblem ? (
+                  <span className="mt-1 block text-warning" dir="auto">
+                    {liveProblem}
+                  </span>
+                ) : null}
+              </>
+            }
+            isSelected={shot.liveCapture}
+            onChange={(liveCapture) => form.set('screenshot', { ...shot, liveCapture })}
+            error={errorFor(form.errors, 'screenshot.liveCapture')}
+            badge={
+              !shot.liveCapture || !stream ? null : stream.liveAvailable ? (
+                <StatusChip size="sm" tone="success" label={t('settings.connection.live.available')} />
+              ) : (
+                <StatusChip size="sm" tone="warning" label={t('settings.connection.live.unavailable')} />
+              )
+            }
+          />
+          <NumberRow
+            label={t('settings.connection.live.fps.label')}
+            description={t('settings.connection.live.fps.description')}
+            value={shot.liveFps}
+            onChange={(v) => form.set('screenshot', { ...shot, liveFps: v ?? Number.NaN })}
+            minValue={5}
+            maxValue={60}
+            step={1}
+            unit={t('settings.unit.fps')}
+            isDisabled={!shot.liveCapture}
+            error={errorFor(form.errors, 'screenshot.liveFps')}
+          />
+        </Rows>
+        <h3 className="mt-5 mb-1 text-[11px] font-semibold tracking-wide text-muted uppercase">{t('settings.connection.polling.subtitle')}</h3>
+        {!shot.liveCapture ? <p className="mb-2 text-xs leading-relaxed text-muted">{t('settings.connection.live.off')}</p> : null}
         <Rows>
           <NumberRow
             label={t('settings.connection.polling.active.label')}

@@ -10,7 +10,9 @@
 - Never modify Mirroir (`~/mirroir-mcp`) or `~/.mirroir-mcp`; never use
   `--dangerously-skip-permissions` / `--yolo`. No real-iPhone input without the user's approval.
 - The app bundles the official nodejs.org Node runtime (downloaded and SHA-256-verified by
-  `pnpm package:mac`); never bundle or depend on Hermes Agent or `~/.hermes`.
+  `pnpm package:mac`); never bundle or depend on Hermes Agent or `~/.hermes`. Build and test
+  with that same runtime too: `source scripts/env.sh` first (puts the verified Node from
+  `.cache/node/` ahead of any other node on PATH).
 - Package with `pnpm package:mac -- --install` and launch `/Applications/iPhone AI.app`
   (macOS privacy protection blocks the bundled server inside ~/Documents).
 - Tests: `pnpm test` (mock Mirroir, no phone), `pnpm test:e2e` (Playwright), `pnpm test:device`

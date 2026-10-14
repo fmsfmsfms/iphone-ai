@@ -14,6 +14,7 @@
 //   to the policy (its password / code field rule);
 // • the first failure ends the run and the remaining steps are skipped.
 
+import { swipeAction } from '../ai/agent/toolkit.js';
 import {
   ACTION_TOOL,
   type ActionResult,
@@ -47,7 +48,6 @@ import {
   nearestElement,
   parseKeyCombo,
   referencedVariables,
-  swipeCoordinates,
 } from './steps.js';
 import { WorkflowError, type AutomationTiming, type WorkflowAgents, type WorkflowDevice } from './types.js';
 
@@ -369,8 +369,10 @@ export class WorkflowExecution {
       case 'swipe': {
         const geometry = this.deps.device.geometry;
         if (!geometry) throw new StepFailure(UNKNOWN_GEOMETRY);
-        const points = swipeCoordinates(geometry.widthPt, geometry.heightPt, step.direction, step.distance);
-        await this.act({ kind: 'swipe', ...points }, { summary: `Swipe ${step.direction}`, geometryId: geometry.geometryId });
+        // A finger flick (Mirroir drag), like the AI's swipe: Mirroir's scroll-wheel
+        // swipe adds a ~1.4 s momentum tail and pages feeds unreliably.
+        const flick = swipeAction(step.direction, step.distance ?? 'medium', geometry.widthPt, geometry.heightPt);
+        await this.act(flick, { summary: `Swipe ${step.direction}`, geometryId: geometry.geometryId });
         return { message: `Swiped ${step.direction}` };
       }
       case 'type_text': {

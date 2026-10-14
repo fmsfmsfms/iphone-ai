@@ -5,6 +5,9 @@ import { EventEmitter } from 'node:events';
 import {
   ALWAYS_DENIED_TOOLS,
   createDefaultSettings,
+  DEFAULT_LIVE_FPS,
+  MAX_LIVE_FPS,
+  MIN_LIVE_FPS,
   settingsPatchSchema,
   type AppSettings,
   type SettingsPatch,
@@ -13,6 +16,25 @@ import {
 import type { Database } from '../db/database.js';
 
 const SETTINGS_KEY = 'app';
+/** Row holding the ids of one-time settings migrations already applied. */
+const MIGRATIONS_KEY = 'migrations';
+
+/**
+ * One-time migrations of values that were defaults in older versions. A user
+ * still on the old default gets the new one; any other (customized) value is
+ * kept. Each runs once per database, so choosing the old value again later
+ * sticks.
+ */
+const MIGRATIONS: readonly { id: string; apply(settings: AppSettings): void }[] = [
+  {
+    // 0.1.x: faster AI observation (settle 900 → 450 ms) and a shorter request timeout (60 → 30 s).
+    id: '2026-10-faster-observation',
+    apply(settings) {
+      if (settings.ai.settleDelayMs === 900) settings.ai.settleDelayMs = 450;
+      if (settings.connection.requestTimeoutMs === 60000) settings.connection.requestTimeoutMs = 30000;
+    },
+  },
+];
 
 type SettingsListener = (next: AppSettings, previous: AppSettings) => void;
 
@@ -37,7 +59,7 @@ export class SettingsStore {
       if (!values) continue;
       const target = next[section as keyof Omit<AppSettings, 'version'>] as unknown as Record<string, unknown>;
       for (const [key, value] of Object.entries(values)) {
-        target[key] = structuredClone(value);
+        target[key] = mergeNested(target[key], value);
       }
     }
     sanitize(next);
@@ -69,6 +91,8 @@ export class SettingsStore {
     const row = this.db.get<{ value: string }>('SELECT value FROM settings WHERE key = ?', SETTINGS_KEY);
     if (!row) {
       this.persist(defaults);
+      // Fresh install: already on the current defaults.
+      this.recordMigrations(MIGRATIONS.map((m) => m.id));
       return defaults;
     }
     let stored: Partial<AppSettings>;
@@ -79,7 +103,36 @@ export class SettingsStore {
     }
     const merged = mergeDefaults(defaults, stored);
     sanitize(merged);
+    const done = this.appliedMigrations();
+    const pending = MIGRATIONS.filter((m) => !done.has(m.id));
+    if (pending.length > 0) {
+      for (const migration of pending) migration.apply(merged);
+      sanitize(merged);
+      this.persist(merged);
+      this.recordMigrations([...done, ...pending.map((m) => m.id)]);
+    }
     return merged;
+  }
+
+  private appliedMigrations(): Set<string> {
+    const row = this.db.get<{ value: string }>('SELECT value FROM settings WHERE key = ?', MIGRATIONS_KEY);
+    if (!row) return new Set();
+    try {
+      const ids = JSON.parse(row.value) as unknown;
+      return new Set(Array.isArray(ids) ? ids.filter((id): id is string => typeof id === 'string') : []);
+    } catch {
+      return new Set();
+    }
+  }
+
+  private recordMigrations(ids: readonly string[]): void {
+    this.db.run(
+      `INSERT INTO settings (key, value, updated_at) VALUES (?, ?, ?)
+       ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
+      MIGRATIONS_KEY,
+      JSON.stringify([...new Set(ids)]),
+      Date.now(),
+    );
   }
 
   private save(): void {
@@ -97,14 +150,38 @@ export class SettingsStore {
   }
 }
 
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+/**
+ * A patched value: nested plain objects (connection.screenshot) are merged
+ * over the current value so keys an older client omits are kept; arrays and
+ * scalars replace it.
+ */
+export function mergeNested(current: unknown, value: unknown): unknown {
+  if (isPlainObject(current) && isPlainObject(value)) {
+    const out: Record<string, unknown> = { ...current };
+    for (const [key, v] of Object.entries(value)) if (v !== undefined) out[key] = structuredClone(v);
+    return out;
+  }
+  return structuredClone(value);
+}
+
 /** Fills in fields added in newer versions while keeping stored user values. */
 function mergeDefaults(defaults: AppSettings, stored: Partial<AppSettings>): AppSettings {
   const out = structuredClone(defaults) as unknown as Record<string, unknown>;
-  for (const [section, value] of Object.entries(stored)) {
+  for (const [section, value] of Object.entries(stored) as [string, unknown][]) {
     if (section === 'version') continue;
     const base = out[section];
-    if (base && typeof base === 'object' && !Array.isArray(base) && value && typeof value === 'object') {
-      out[section] = { ...(base as Record<string, unknown>), ...(value as unknown as Record<string, unknown>) };
+    if (isPlainObject(base) && isPlainObject(value)) {
+      const merged: Record<string, unknown> = { ...base, ...value };
+      // One level deeper for nested objects (connection.screenshot gained live-capture keys).
+      for (const [key, nested] of Object.entries(base)) {
+        const storedNested = value[key];
+        if (isPlainObject(nested) && isPlainObject(storedNested)) merged[key] = { ...nested, ...storedNested };
+      }
+      out[section] = merged;
     }
   }
   return out as unknown as AppSettings;
@@ -126,4 +203,9 @@ function sanitize(settings: AppSettings): void {
     settings.ai.visionProviderId = null;
   }
   if (!settings.remote.passcodeSet) settings.remote.enabled = false;
+  const screenshot = settings.connection.screenshot;
+  if (typeof screenshot.liveCapture !== 'boolean') screenshot.liveCapture = true;
+  screenshot.liveFps = Number.isFinite(screenshot.liveFps)
+    ? Math.min(MAX_LIVE_FPS, Math.max(MIN_LIVE_FPS, Math.round(screenshot.liveFps)))
+    : DEFAULT_LIVE_FPS;
 }

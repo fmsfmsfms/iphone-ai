@@ -53,11 +53,12 @@ SHA-256 against nodejs.org's published checksums before bundling it.
 
 ## 4. Live Control
 
-- The center viewer shows the phone screen. Frames are **polled screenshots** (default
-  2 fps while active, slower when idle, paused when hidden) — the panel shows the real
-  measured FPS and latency.
-- Turn on **Manual control** (left panel or `M`) to interact: click = tap, drag = swipe
-  (quick) or drag (slow), and Long-press / Double-tap modes. Home, Back, App Switcher,
+- The center viewer shows the phone screen as a **live ScreenCaptureKit stream** (up to
+  30 fps) once iPhone AI has Screen Recording permission. Without it, it falls back to
+  polled screenshots (≈2 fps). The panel shows the source and the measured FPS/latency.
+- Turn on **Manual control** (left panel or `M`) to interact: click = tap, drag = a finger
+  flick or drag (like a real finger, so feeds page one item at a time), arrow keys flick,
+  and Long-press / Double-tap modes. Home, Back, App Switcher,
   Spotlight, Open app, and a text field for typing are in the left panel.
 - Touches are refused if the iPhone Mirroring window changed size since the frame you
   clicked on — refresh and try again.

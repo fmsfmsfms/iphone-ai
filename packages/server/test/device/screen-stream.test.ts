@@ -5,15 +5,20 @@ import { afterEach, describe, expect, it } from 'vitest';
 import type { ServerEvent } from '@iphone-ai/shared';
 
 import { silentLogger } from '../../src/core/logger.js';
+import { LiveCapture, type LiveCaptureTimings } from '../../src/device/live-capture.js';
 import { ScreenStream } from '../../src/device/screen-stream.js';
 import { createDeviceContext, sleep, waitFor, type DeviceContext, type DeviceOptions } from '../helpers/context.js';
+import { fakeHelper, type FakeHelper, type FakeScenario } from '../live-capture/helpers.js';
 
 let ctx: DeviceContext | null = null;
 let stream: ScreenStream | null = null;
+let live: LiveCapture | null = null;
 
 afterEach(async () => {
   stream?.stop();
   stream = null;
+  await live?.shutdown();
+  live = null;
   await ctx?.cleanup();
   ctx = null;
 });
@@ -142,5 +147,119 @@ describe('ScreenStream', () => {
     await waitFor(() => s.stats().consecutiveErrors >= 1, { timeoutMs: 5000 });
     expect(s.stats().lastError).toBe("Failed to capture screenshot. Is the 'iphone' window visible?");
     expect(s.stats().measuredFps).toBe(0);
+  });
+});
+
+// Live capture handover: the REAL DeviceController on the mock Mirroir server,
+// plus LiveCapture driven by the FAKE capture helper (no ScreenCaptureKit, no phone).
+describe('ScreenStream with live capture', () => {
+  async function setupLive(
+    scenario: FakeScenario,
+    timings: Partial<LiveCaptureTimings> = {},
+  ): Promise<{ c: DeviceContext; s: ScreenStream; l: LiveCapture; helper: FakeHelper }> {
+    ctx = await createDeviceContext();
+    await ctx.device.refreshPermissions();
+    await ctx.device.refreshStatus();
+    const helper = fakeHelper(ctx.dir, scenario);
+    live = new LiveCapture({
+      device: ctx.device,
+      settings: ctx.settings,
+      hub: ctx.hub,
+      log: silentLogger,
+      helper: helper.command,
+      timings: { tickMs: 50, ...timings },
+    });
+    stream = new ScreenStream(ctx.device, ctx.settings, ctx.hub, silentLogger, live);
+    live.start();
+    stream.start();
+    return { c: ctx, s: stream, l: live, helper };
+  }
+
+  it('reports live capture as unavailable and keeps polling when there is no helper', async () => {
+    ctx = await createDeviceContext();
+    await ctx.device.refreshPermissions();
+    await ctx.device.refreshStatus();
+    live = new LiveCapture({ device: ctx.device, settings: ctx.settings, hub: ctx.hub, log: silentLogger, helper: null, unavailableReason: 'the iphone-ai-capture helper is not installed' });
+    stream = new ScreenStream(ctx.device, ctx.settings, ctx.hub, silentLogger, live);
+    live.start();
+    stream.start();
+    stream.setViewer('v1', { visible: true, interactive: true });
+    await waitFor(() => screenshots(ctx!) >= 2, { timeoutMs: 5000 });
+    expect(stream.stats()).toMatchObject({
+      mode: 'polling-screenshots',
+      running: true,
+      liveAvailable: false,
+      liveError: 'Live capture unavailable: the iphone-ai-capture helper is not installed.',
+    });
+  });
+
+  it('pauses polling while live frames arrive, resumes it when the helper dies, and goes live again after the retry', async () => {
+    const { c, s, l, helper } = await setupLive({ crashAfterFrames: 45 }, { retryBaseMs: 2500 });
+    s.setViewer('v1', { visible: true, interactive: true });
+    await waitFor(() => l.isDelivering(), { timeoutMs: 5000, message: 'live frames never arrived' });
+    // Give an in-flight screenshot (started before the handover) time to finish.
+    await sleep(400);
+    const before = screenshots(c);
+    await sleep(800);
+    expect(screenshots(c)).toBe(before);
+    expect(s.stats()).toMatchObject({
+      mode: 'live-screencapturekit',
+      running: true,
+      targetFps: 30,
+      pausedReason: 'Live capture active',
+      liveAvailable: true,
+      liveError: null,
+      viewers: 1,
+    });
+    expect(s.stats().measuredFps).toBeGreaterThan(10);
+    await waitFor(
+      () => c.events.some((e: ServerEvent) => e.type === 'stream_stats' && e.stats.mode === 'live-screencapturekit'),
+      { timeoutMs: 3000, message: 'no live stream_stats event' },
+    );
+    // Live frames share the frame sequence with polled screenshots.
+    const polledSeq = c.device.getLatestFrame()?.meta.seq ?? 0;
+    expect(l.latest()!.meta.seq).toBeGreaterThan(polledSeq);
+    // The mock's window is 410x898 like the fake helper's, so touch geometry is attached.
+    expect(l.latest()!.meta.geometry?.geometryId).toBe('410x898');
+
+    // The helper crashes: polling takes over at once, the error is reported.
+    await waitFor(() => helper.log().some((e) => e.event === 'crash'), { timeoutMs: 5000 });
+    const atCrash = screenshots(c);
+    await waitFor(() => screenshots(c) >= atCrash + 2, { timeoutMs: 4000, message: 'polling did not resume' });
+    expect(s.stats()).toMatchObject({ mode: 'polling-screenshots', running: true, liveAvailable: true });
+    expect(s.stats().liveError).toMatch(/exited unexpectedly/);
+    expect(s.stats().pausedReason).toBeNull();
+
+    // Retried with backoff: live again, polling paused again.
+    helper.setScenario({});
+    await waitFor(() => helper.starts().length === 2 && l.isDelivering(), { timeoutMs: 6000, message: 'helper not retried' });
+    await waitFor(() => s.stats().mode === 'live-screencapturekit', { timeoutMs: 2000 });
+    expect(s.stats().liveError).toBeNull();
+  });
+
+  it('resumes polling within the 2 s live window when frames stop arriving (nothing changes on screen)', async () => {
+    const { c, s, l } = await setupLive({ frames: 10 });
+    s.setViewer('v1', { visible: true, interactive: true });
+    await waitFor(() => l.isDelivering(), { timeoutMs: 5000 });
+    const lastLive = () => l.stats().lastFrameAt ?? 0;
+    await waitFor(() => !l.isDelivering(), { timeoutMs: 4000 });
+    // Not delivering means no frame within the last 2 s.
+    expect(Date.now() - lastLive()).toBeGreaterThanOrEqual(2000);
+    const n = screenshots(c);
+    await waitFor(() => screenshots(c) >= n + 1, { timeoutMs: 3000, message: 'polling did not resume after live frames stopped' });
+    expect(s.stats().mode).toBe('polling-screenshots');
+  });
+
+  it('starts live capture for an AI task without a viewer and keeps Mirroir free of polling', async () => {
+    const { c, s, l } = await setupLive({}, {});
+    c.settings.update({ permissions: { controlMode: 'supervised' } });
+    const lease = c.device.acquireLease('ai', 'Task');
+    s.markActivity();
+    await waitFor(() => l.isDelivering(), { timeoutMs: 5000, message: 'no live capture while the AI held control' });
+    await sleep(400);
+    const n = screenshots(c);
+    await sleep(800);
+    expect(screenshots(c)).toBe(n);
+    lease.release();
   });
 });

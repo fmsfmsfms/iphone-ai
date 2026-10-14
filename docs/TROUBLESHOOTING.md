@@ -3,6 +3,12 @@
 Start with **Dashboard → Setup checklist** and **Settings → iPhone Connection → Run
 diagnostics**. They show exactly what Mirroir reports.
 
+## The live view is slow (≈2 fps) or says "polling"
+
+The smooth live view needs iPhone AI itself to have Screen Recording permission (the
+bundled capture helper inherits it). Grant it as below and relaunch; the viewer badge then
+shows the live source. Settings → iPhone Connection shows why live capture is unavailable.
+
 ## The viewer says "Screen Recording permission not confirmed"
 
 iPhone AI only takes screenshots after macOS confirms Screen Recording. Without it,

@@ -402,16 +402,17 @@ describe('workflow runs', () => {
     expect(fallback.steps[0]!.message).toMatch(/No AI provider is configured/);
   });
 
-  it('computes swipe coordinates from the window geometry', async () => {
+  it('replays swipe steps as finger flicks computed from the window geometry', async () => {
     const id = workflow([
       { id: 'a', type: 'swipe', direction: 'up' },
       { id: 'b', type: 'swipe', direction: 'left', distance: 'long' },
     ]);
     const run = await runToEnd(id);
     expect(run.status).toBe('succeeded');
+    // Mirroir drag (a real touch flick), not its scroll-wheel swipe with a momentum tail.
     expect(h.device.performed.map((p) => p.action)).toEqual([
-      { kind: 'swipe', fromX: 205, fromY: 629, toX: 205, toY: 269 },
-      { kind: 'swipe', fromX: 308, fromY: 449, toX: 103, toY: 449 },
+      { kind: 'drag', fromX: 205, fromY: 629, toX: 205, toY: 269, durationMs: 200, asSwipe: true },
+      { kind: 'drag', fromX: 318, fromY: 449, toX: 92, toY: 449, durationMs: 240, asSwipe: true },
     ]);
   });
 

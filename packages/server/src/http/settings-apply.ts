@@ -8,6 +8,7 @@
 import { settingsPatchSchema, type Actor, type AppSettings, type ControlMode, type SettingsPatch } from '@iphone-ai/shared';
 
 import type { AppContext } from '../core/services.js';
+import { mergeNested } from '../core/settings-store.js';
 import { inputEnabled } from '../mcp/workspace.js';
 
 /**
@@ -30,7 +31,8 @@ export function applySettingsPatch(ctx: AppContext, patch: SettingsPatch): AppSe
       const target = draft[section as keyof Omit<AppSettings, 'version'>] as unknown as Record<string, unknown> | undefined;
       if (!target) continue;
       for (const [key, value] of Object.entries(values as Record<string, unknown>)) {
-        if (value !== undefined) target[key] = structuredClone(value);
+        // Nested objects (connection.screenshot) merge, so a client that omits newer keys keeps their values.
+        if (value !== undefined) target[key] = mergeNested(target[key], value);
       }
     }
   });

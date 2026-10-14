@@ -236,7 +236,8 @@ body {
   background: #000;
 }
 
-.phone-screen img {
+.phone-screen img,
+.phone-screen canvas {
   user-select: none;
   -webkit-user-drag: none;
   pointer-events: none;

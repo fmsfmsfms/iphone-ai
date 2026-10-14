@@ -65,6 +65,8 @@ export function makeStream(overrides: Partial<StreamStats> = {}): StreamStats {
     viewers: 1,
     consecutiveErrors: 0,
     lastError: null,
+    liveAvailable: false,
+    liveError: null,
     ...overrides,
   };
 }
@@ -181,4 +183,31 @@ export function makeBootstrap(overrides: Partial<BootstrapResponse> = {}): Boots
     version: '0.1.0',
     ...overrides,
   };
+}
+
+/** A /ws/screen header (FrameMeta-like) for a 410×890 pt window captured at 2×. */
+export function makeLiveHeader(seq: number, overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    seq,
+    capturedAt: 100_000 + seq,
+    receivedAt: 100_005 + seq,
+    latencyMs: 5,
+    widthPx: 820,
+    heightPx: 1780,
+    mimeType: 'image/jpeg',
+    pxPerPt: 2,
+    geometry: { widthPt: 410, heightPt: 890, orientation: 'portrait', geometryId: '410x890', observedAt: 1_000 },
+    source: 'screencapturekit',
+    ...overrides,
+  };
+}
+
+/** Encodes one /ws/screen binary message: [u32 BE header length][JSON header][JPEG bytes]. */
+export function encodeScreenMessage(header: unknown, jpeg: Uint8Array = new Uint8Array([0xff, 0xd8, 0xff, 0xd9])): ArrayBuffer {
+  const json = new TextEncoder().encode(JSON.stringify(header));
+  const out = new Uint8Array(4 + json.length + jpeg.length);
+  new DataView(out.buffer).setUint32(0, json.length, false);
+  out.set(json, 4);
+  out.set(jpeg, 4 + json.length);
+  return out.buffer;
 }

@@ -1,7 +1,8 @@
 # iPhone AI — Local API
 
-The backend (Node.js, Fastify) serves the UI, a JSON REST API under `/api`, and a
-WebSocket at `/ws`. Types referenced below live in `packages/shared/src`.
+The backend (Node.js, Fastify) serves the UI, a JSON REST API under `/api`, an event
+WebSocket at `/ws` and a binary live-frame WebSocket at `/ws/screen`. Types referenced
+below live in `packages/shared/src`.
 
 ## Security model
 
@@ -9,7 +10,7 @@ WebSocket at `/ws`. Types referenced below live in `packages/shared/src`.
 - Every request's `Host` header must be `127.0.0.1:<port>` or `localhost:<port>` (DNS-rebinding defence). The remote listener accepts only its configured address.
 - Every `/api/*` route (except `GET /api/health` and `POST /api/auth/remote-login`) requires a session cookie `iai_session` (HttpOnly, SameSite=Strict, Path=/).
 - Every state-changing request (`POST`/`PUT`/`DELETE`) must carry header `x-iphone-ai: 1` (CSRF defence) and, when present, an `Origin` matching the host.
-- The WebSocket upgrade requires the session cookie and a matching `Origin`.
+- WebSocket upgrades (`/ws` and `/ws/screen`) require the session cookie and a matching `Origin`.
 - Sessions:
   - **desktop**: the Tauri shell generates a random token (env `IPHONE_AI_DESKTOP_TOKEN`) and opens `/auth/desktop?token=…`; the backend sets the cookie and redirects to `/`.
   - **local-browser**: `POST /api/auth/browser-link` (desktop session only) creates a one-time code valid 2 minutes; `GET /auth/local?code=…` exchanges it for a cookie.
@@ -51,10 +52,10 @@ Errors are JSON: `{ "error": { "code": string, "message": string } }` with an HT
 ### Screen
 | Method | Path | Body | Response |
 |---|---|---|---|
-| GET | `/api/screen/frame/latest` | — | `image/png`, header `x-frame-seq`; 404 if no frame |
+| GET | `/api/screen/frame/latest` | — | The newest frame from either source: `image/png` (polled Mirroir screenshot) or `image/jpeg` (live ScreenCaptureKit frame). Headers `x-frame-seq` and `x-frame-source: mirroir-screenshot \| screencapturekit`; 404 if no frame. Both sources share one sequence, so a higher seq is always newer. |
 | POST | `/api/screen/capture` | `{ settleMs?: number, resume?: boolean }` | `FrameMeta` (user-initiated; `resume` lets Mirroir press Resume when paused) |
 | POST | `/api/screen/describe` | — | `{ elements: ScreenElement[], rawText, fingerprint, geometry }` |
-| GET | `/api/screen/stream` | — | `StreamStats` |
+| GET | `/api/screen/stream` | — | `StreamStats` (see [Live view](#live-view-polling-and-screencapturekit)) |
 | GET | `/api/screenshots/:id` | — | image (AI step / workflow screenshots) |
 
 ### Control & safety
@@ -132,10 +133,104 @@ Errors are JSON: `{ "error": { "code": string, "message": string } }` with an HT
 ## WebSocket `/ws`
 
 Server → client: JSON `ServerEvent` (see `packages/shared/src/events.ts`). The first
-message is `hello`. Frames are announced with `{ type: 'frame', meta }`; the UI then
-loads `/api/screen/frame/latest?seq=<seq>`.
+message is `hello`. Polled screenshots are announced with `{ type: 'frame', meta }`; the
+UI then loads `/api/screen/frame/latest?seq=<seq>`. Live ScreenCaptureKit frames are not
+announced here — they arrive on `/ws/screen`. `stream_stats` events carry `StreamStats`.
 
 Client → server: `ClientEvent`:
-- `{ type: 'viewer', visible, interactive }` — drives screenshot polling (paused when no viewer is visible).
+- `{ type: 'viewer', visible, interactive }` — drives screenshot polling (paused when no viewer is visible) and live capture.
 - `{ type: 'activity_ping' }` — user interaction; keeps the active frame rate.
 - `{ type: 'ping', t }` — keep-alive.
+
+## WebSocket `/ws/screen`
+
+Binary live frames from the ScreenCaptureKit capture helper. Same rules as `/ws`: session
+cookie, matching `Origin`, `Host` check; any authenticated session may view (remote
+view-only sessions included). Opening it does not start capture — the `/ws` `viewer`
+messages do. Clients send nothing (pings/messages only prove liveness).
+
+Each server → client message is **binary**:
+
+```
+[4-byte big-endian uint32 H][H bytes UTF-8 JSON LiveFrameHeader][JPEG bytes]
+```
+
+`LiveFrameHeader` (`packages/shared/src/device.ts`) is a `FrameMeta` with:
+
+| Field | Meaning |
+|---|---|
+| `seq` | Frame sequence, shared with polled screenshots (higher = newer) |
+| `capturedAt` | Epoch ms when ScreenCaptureKit captured the frame |
+| `receivedAt` | Epoch ms when the backend received it |
+| `latencyMs` | `receivedAt - capturedAt` |
+| `widthPx`, `heightPx` | JPEG size (long edge ≤ 1600 px) |
+| `mimeType` | `'image/jpeg'` |
+| `pxPerPt` | JPEG pixels per window point (`widthPx / window width in pt`) |
+| `geometry` | `WindowGeometry`, **only** when the captured window size (pt) equals Mirroir's current status geometry; otherwise `null` (do not derive touch coordinates from such a frame) |
+| `source` | `'screencapturekit'` |
+
+Behaviour:
+- The latest frame is sent immediately on connect, then every new frame.
+- Per-connection backpressure: a frame is skipped (never queued) while the socket has more than 1.5 MB buffered.
+- Remote sessions receive at most 10 frames per second; local sessions get the helper's rate (`connection.screenshot.liveFps`).
+
+## Live view: polling and ScreenCaptureKit
+
+Two frame sources feed the viewer:
+
+1. **Live capture** (`mode: 'live-screencapturekit'`): the bundled helper `iphone-ai-capture`
+   (path from env `IPHONE_AI_CAPTURE_BIN`, set by the desktop app; in development
+   `src-tauri/binaries/iphone-ai-capture-<arch>-apple-darwin` when present; never picked
+   up implicitly in mock mode) streams the iPhone Mirroring window as JPEG over its
+   stdout. It never touches Mirroir, so Mirroir's single serial lane stays free for actions.
+   It runs while a viewer is visible **or** an AI task / workflow holds control, live capture
+   is enabled (`connection.screenshot.liveCapture`), Screen Recording is confirmed and iPhone
+   Mirroring is running (connected **or paused** — ScreenCaptureKit has no side effects). It
+   stops 10 s after the last of these goes false (immediately when switched off). Errors,
+   crashes, a missing first frame (3 s) or a stream that stays silent while polled
+   screenshots show the screen changing restart it with backoff (1 s doubling to 30 s;
+   60 s after a Screen Recording denial).
+2. **Polling** (`mode: 'polling-screenshots'`): Mirroir `screenshot` calls at
+   `activeFps`/`idleFps`, only with a visible viewer (or AI control), Screen Recording
+   confirmed and Mirroring connected.
+
+Polling pauses with `pausedReason: 'Live capture active'` while live frames are actually
+arriving (one within the last 2 s) and resumes on its own when they stop. ScreenCaptureKit
+normally delivers frames only when the window content changes, so on a still screen polling
+may resume until the next change (not yet measured on the real device). `StreamStats`:
+
+| Field | Meaning |
+|---|---|
+| `mode` | `'live-screencapturekit'` only while live frames arrive; otherwise `'polling-screenshots'` |
+| `running`, `targetFps`, `measuredFps`, `avgLatencyMs` | Of the source in charge (live: helper fps, frames received over 10 s, capture → backend latency) |
+| `lastFrameAt` | Newest frame from either source |
+| `pausedReason` | Why polling is paused (`'Live capture active'`, `'No visible viewer'`, …) |
+| `liveAvailable` | A capture helper is installed and live capture is enabled |
+| `liveError` | Why live frames are not arriving (helper missing, permission, crash, waiting for the window); `null` while live or when nothing is wrong |
+| `viewers`, `consecutiveErrors`, `lastError` | Visible viewers; polling errors |
+
+The backend log records `Live capture started (ScreenCaptureKit, WxH px, N fps)`,
+`Live capture unavailable: <reason>` and, every 60 s while running,
+`Live capture stats: fps=…, avgLatencyMs=…, frames=…`.
+
+## Settings notes
+
+- `connection.screenshot.liveCapture` (default `true`) and `liveFps` (default 30, 5–60).
+  Both are optional in a `PUT /api/settings` patch: a `screenshot` object without them keeps
+  the current values (the nested object is merged).
+- `ai.settleDelayMs` defaults to 450 ms (was 900). On first start of this version, a stored
+  `settleDelayMs` of exactly 900 becomes 450 and a stored `connection.requestTimeoutMs` of
+  exactly 60000 becomes 30000; customized values are kept, and the migration runs once.
+
+## AI gestures
+
+The AI `swipe` tool is a finger **flick**: a `DeviceAction` `{ kind: 'drag', …, asSwipe: true }`
+sent as Mirroir `drag` (a real touch drag; iOS treats a fast drag as a flick) instead of
+Mirroir `swipe` (a synthesized trackpad scroll with a momentum tail). It is centred on the
+screen with travel `short | medium | long` = 25 / 40 / 55 % of the screen dimension over
+160 / 200 / 240 ms, staying ≥ 60 pt from the top and bottom edges. The allowed-AI-tools
+setting governs it through its `swipe` entry. Optional `times` (1–10) and `interval_ms`
+(300–3000, default 700) repeat the flick; every repetition is policy-checked and counted
+as an action, one approval covers the batch in Assisted Control, and one observation
+follows the last flick. Before each AI observation the screen-settle wait is capped at
+700 ms (Mirroir `screenshot` `settle_ms`).

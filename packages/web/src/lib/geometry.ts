@@ -138,15 +138,15 @@ export function fitAspect(available: Size, aspect: number): Size {
   return { width: available.height * aspect, height: available.height };
 }
 
-export type GestureKind = 'tap' | 'swipe' | 'drag';
+export type GestureKind = 'tap' | 'drag';
 
-/** Movement beyond this many CSS pixels turns a press into a swipe or drag. */
+/** Movement beyond this many CSS pixels turns a press into a drag. */
 export const GESTURE_MOVE_THRESHOLD_PX = 8;
-/** A moved press released within this time is a swipe; slower ones are drags. */
-export const SWIPE_MAX_DURATION_MS = 600;
 
-/** Classifies a pointer gesture from its CSS-pixel travel and duration. */
-export function classifyGesture(travelPx: number, durationMs: number): GestureKind {
-  if (travelPx <= GESTURE_MOVE_THRESHOLD_PX) return 'tap';
-  return durationMs <= SWIPE_MAX_DURATION_MS ? 'swipe' : 'drag';
+/**
+ * Classifies a pointer gesture from its CSS-pixel travel. Every moved press is
+ * a (finger-like) drag, whatever its speed: see lib/gestures.ts.
+ */
+export function classifyGesture(travelPx: number): GestureKind {
+  return travelPx <= GESTURE_MOVE_THRESHOLD_PX ? 'tap' : 'drag';
 }

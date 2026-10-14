@@ -208,6 +208,21 @@ describe('recorder', () => {
     expect(h.service.list()).toHaveLength(1);
   });
 
+  it('records finger drags from the Live viewer as swipe steps', async () => {
+    h.device.current = 'settings';
+    h.service.startRecording('Next videos');
+    await h.service.recorderSettled();
+    h.device.emitManual({ kind: 'drag', fromX: 205, fromY: 620, toX: 205, toY: 270, durationMs: 180 });
+    await h.service.recorderSettled();
+    h.device.emitManual({ kind: 'drag', fromX: 330, fromY: 450, toX: 90, toY: 452, durationMs: 200 });
+    await h.service.recorderSettled();
+    const wf = h.service.stopRecording(true)!;
+    expect(wf.steps.map((step) => ({ type: step.type, direction: 'direction' in step ? step.direction : null }))).toEqual([
+      { type: 'swipe', direction: 'up' },
+      { type: 'swipe', direction: 'left' },
+    ]);
+  });
+
   it('never stores text typed on a password screen (a checkpoint replaces it) and discards when not saving', async () => {
     h.device.screens.login = [
       { label: 'Apple Account', x: 205, y: 120 },

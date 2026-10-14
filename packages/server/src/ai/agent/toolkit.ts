@@ -106,6 +106,8 @@ type ToolOutput = { content: ModelContent[]; isError: boolean };
 
 /** Screenshots per task sent to the model; later observations are text only (history is never edited). */
 export const MAX_IMAGES_PER_TASK = 30;
+/** Default pause between repeated flicks (swipe `times` > 1). */
+export const DEFAULT_FLICK_INTERVAL_MS = 700;
 const ALREADY_FINISHED = 'The task already finished (finish_task was called). No more tools can run; reply with one short sentence for the user.';
 
 const reason = z.string().max(300).describe('One short sentence: why this action moves the task forward.');
@@ -121,8 +123,21 @@ const SHAPES = {
   double_tap: { ...target, reason },
   long_press: { ...target, duration_ms: z.number().int().min(300).max(3000).optional(), reason },
   swipe: {
-    direction: z.enum(['up', 'down', 'left', 'right']).describe('Finger direction. "up" scrolls content down to reveal items further down.'),
-    distance: z.enum(['short', 'medium', 'long']).optional(),
+    direction: z
+      .enum(['up', 'down', 'left', 'right'])
+      .describe('Finger direction. "up" moves the finger up: the page scrolls down to reveal items further down (in TikTok/Reels/Shorts: the next video).'),
+    distance: z
+      .enum(['short', 'medium', 'long'])
+      .optional()
+      .describe('How far the finger travels: short, medium (default) or long = 25%, 40% or 55% of the screen.'),
+    times: z
+      .number()
+      .int()
+      .min(1)
+      .max(10)
+      .optional()
+      .describe('Repeat the flick this many times (1–10, default 1), e.g. to page through several videos or screens. One observation is returned after the last flick.'),
+    interval_ms: z.number().int().min(300).max(3000).optional().describe('Pause between repeated flicks in milliseconds (300–3000, default 700).'),
     reason,
   },
   type_text: {
@@ -158,7 +173,8 @@ const DESCRIPTIONS: Record<ToolName, string> = {
   tap: 'Tap an element (preferred: element_id from the latest observation) or a point (x, y in window points). A fresh observation is returned afterwards.',
   double_tap: 'Double-tap an element or point (e.g. to zoom or select a word).',
   long_press: 'Press and hold an element or point (context menus, Quick Actions).',
-  swipe: 'Swipe across the middle of the screen. "up" moves the finger up (scrolls down the page). Use for scrolling and paging.',
+  swipe:
+    'Flick the screen: a quick finger swipe across its middle, like a real finger. "up" moves the finger up (scrolls down the page; next video in TikTok, Reels or Shorts). Use for scrolling and paging. With times > 1 it flicks repeatedly (interval_ms apart) and returns one observation after the last flick.',
   type_text:
     'Type text into the currently focused text field (tap the field first). Never use for passwords, passcodes or codes. Do not include line breaks; use press_key "return" to submit.',
   press_key: 'Press a key: return (submit/search), delete (backspace), escape, tab, space or arrows.',
@@ -474,6 +490,9 @@ export class AgentToolkit {
     let action: DeviceAction;
     let ref: TargetRef = { kind: 'none' };
     let targetDescription = '';
+    /** Repeated flicks (swipe `times`): each is policy-checked; one observation follows the last. */
+    let repeat = 1;
+    let intervalMs = DEFAULT_FLICK_INTERVAL_MS;
     const pointer = name === 'tap' || name === 'double_tap' || name === 'long_press';
     if (pointer) {
       const resolved = this.resolveTarget(args, observation);
@@ -488,8 +507,10 @@ export class AgentToolkit {
             : { kind: 'long_press', x: resolved.x, y: resolved.y, ...(args.duration_ms ? { durationMs: Number(args.duration_ms) } : {}) };
     } else if (name === 'swipe') {
       if (!geometry) return errorResult('The screen size is unknown; call observe_screen first.');
-      action = swipeAction(args.direction as SwipeDirection, (args.distance as 'short' | 'medium' | 'long' | undefined) ?? 'medium', geometry.widthPt, geometry.heightPt);
-      targetDescription = `${String(args.direction)} (${String(args.distance ?? 'medium')})`;
+      action = swipeAction(args.direction as SwipeDirection, (args.distance as FlickDistance | undefined) ?? 'medium', geometry.widthPt, geometry.heightPt);
+      repeat = typeof args.times === 'number' ? Math.min(10, Math.max(1, Math.round(args.times))) : 1;
+      intervalMs = typeof args.interval_ms === 'number' ? Math.min(3000, Math.max(300, Math.round(args.interval_ms))) : DEFAULT_FLICK_INTERVAL_MS;
+      targetDescription = `${String(args.direction)} (${String(args.distance ?? 'medium')})${repeat > 1 ? ` ×${repeat}` : ''}`;
     } else if (name === 'type_text') {
       action = { kind: 'type_text', text: String(args.text) };
     } else if (name === 'press_key') {
@@ -529,7 +550,10 @@ export class AgentToolkit {
     const settings = this.deps.settings.get();
     let decision = this.decide(action, this.policyTarget(action, ref, observation), observation);
     const summary = `${humanAction(action, settings.privacy.logTypedText)}${targetDescription ? ` — ${targetDescription}` : ''}`;
-    const displayArgs = redactToolArgs(action.kind, stripKind(action), { keepTypedText: settings.privacy.logTypedText });
+    const displayArgs = {
+      ...redactToolArgs(action.kind, stripKind(action), { keepTypedText: settings.privacy.logTypedText }),
+      ...(repeat > 1 ? { times: repeat, intervalMs } : {}),
+    };
 
     if (decision.verdict === 'deny') return this.blocked(action, summary, displayArgs, decision);
 
@@ -588,50 +612,77 @@ export class AgentToolkit {
       current = recheck.observation;
     }
 
-    // Execute.
-    this.task.setActivity(summary);
+    // Execute (a repeated flick runs `repeat` times, then one observation).
+    this.task.setActivity(repeat > 1 ? `${summary} (1/${repeat})` : summary);
     const fingerprintBefore = current.description.fingerprint;
     const geometryNow = current.description.geometry ?? this.deps.device.geometry;
-    let result: ActionResult;
+    let result: ActionResult | null = null;
+    let performed = 0;
+    let stoppedEarly: string | null = null;
     const started = Date.now();
-    try {
-      result = await this.deps.device.perform(action, {
-        actor: 'ai',
-        leaseId: this.task.leaseId,
-        geometryId: geometryNow?.geometryId ?? null,
-        taskId: this.task.taskId,
-        workflowRunId: this.task.workflowRunId ?? null,
-        decision,
-        approvalId,
-        signal: this.task.signal,
-      });
-    } catch (err) {
-      if (err instanceof DeviceError && (err.code === 'stop_latched' || err.code === 'aborted')) {
-        this.assertActive();
-        throw new TaskAbortedError(err.message, 'stopped');
+    for (let i = 0; i < repeat; i += 1) {
+      if (i > 0) {
+        const gate = await this.beforeRepeat(action, ref, current, decision, approvalId, intervalMs);
+        if ('stop' in gate) {
+          stoppedEarly = gate.stop;
+          break;
+        }
+        decision = gate.decision;
+        this.task.setActivity(`${summary} (${i + 1}/${repeat})`);
       }
-      const message = err instanceof Error ? err.message : String(err);
-      this.task.addStep({
-        type: 'tool_call',
-        title: summary,
-        detail: message,
-        tool: { name: action.kind, args: displayArgs, ok: false, result: message, durationMs: Date.now() - started },
-        screenshotId: null,
-      });
-      if (err instanceof DeviceError && err.code === 'lease_paused') {
-        // Not a stop: the next tool call waits at the pause gate. The user may change the screen meanwhile.
-        this.observation = null;
-        return errorResult('The task was paused before this action ran; it was NOT executed. When the task resumes, call observe_screen and decide again.');
+      try {
+        result = await this.deps.device.perform(action, {
+          actor: 'ai',
+          leaseId: this.task.leaseId,
+          geometryId: geometryNow?.geometryId ?? null,
+          taskId: this.task.taskId,
+          workflowRunId: this.task.workflowRunId ?? null,
+          decision,
+          approvalId,
+          signal: this.task.signal,
+        });
+      } catch (err) {
+        if (err instanceof DeviceError && (err.code === 'stop_latched' || err.code === 'aborted')) {
+          this.assertActive();
+          throw new TaskAbortedError(err.message, 'stopped');
+        }
+        const message = err instanceof Error ? err.message : String(err);
+        this.task.addStep({
+          type: 'tool_call',
+          title: summary,
+          detail: performed > 0 ? `Stopped after ${performed} of ${repeat} flicks: ${message}` : message,
+          tool: { name: action.kind, args: displayArgs, ok: false, result: message, durationMs: Date.now() - started },
+          screenshotId: null,
+        });
+        if (err instanceof DeviceError && err.code === 'lease_paused') {
+          // Not a stop: the next tool call waits at the pause gate. The user may change the screen meanwhile.
+          this.observation = null;
+          if (performed > 0) this.attempts.set(signature, previous + 1);
+          return errorResult(
+            performed > 0
+              ? `The task was paused after ${performed} of ${repeat} flicks; the remaining flicks were NOT executed. When the task resumes, call observe_screen and decide again.`
+              : 'The task was paused before this action ran; it was NOT executed. When the task resumes, call observe_screen and decide again.',
+          );
+        }
+        if (performed === 0) {
+          if (err instanceof DeviceError && err.code === 'geometry_changed') {
+            this.observation = null;
+            return errorResult(`${message} Call observe_screen to get fresh coordinates.`);
+          }
+          return errorResult(`${message}`);
+        }
+        // Some flicks already ran: report them with a fresh observation below.
+        stoppedEarly = message;
+        break;
       }
-      if (err instanceof DeviceError && err.code === 'geometry_changed') {
-        this.observation = null;
-        return errorResult(`${message} Call observe_screen to get fresh coordinates.`);
-      }
-      return errorResult(`${message}`);
+      performed += 1;
+      this.actionsUsed += 1;
+      this.task.onActionsUsed(this.actionsUsed);
+      if (!result.ok) break;
     }
-
-    this.actionsUsed += 1;
-    this.task.onActionsUsed(this.actionsUsed);
+    // performed ≥ 1 here (a first failure returned above), so result is set.
+    result = result!;
+    const durationMs = repeat > 1 ? Date.now() - started : result.durationMs;
     this.attempts.set(signature, previous + 1);
     // Text ending in a line break was committed by that Return (it needed approval).
     if (action.kind === 'type_text' && result.ok) this.pendingTypedText = !/[\r\n]$/.test(action.text);
@@ -652,23 +703,35 @@ export class AgentToolkit {
     const changed = after ? after.observation.description.fingerprint !== fingerprintBefore : null;
     this.unchangedStreak = changed === false ? this.unchangedStreak + 1 : 0;
 
+    const flicks =
+      repeat > 1
+        ? performed < repeat
+          ? `Performed ${performed} of ${repeat} flicks (stopped: ${stoppedEarly ?? 'Mirroir reported a failure'}).`
+          : `Performed ${repeat} flicks, ${intervalMs} ms apart.`
+        : null;
     this.task.addStep({
       type: 'tool_call',
       title: summary,
-      detail: changed === null ? `Could not re-check the screen: ${observeError}` : changed ? 'The screen changed.' : 'The screen did not change.',
+      detail: [
+        flicks,
+        changed === null ? `Could not re-check the screen: ${observeError}` : changed ? 'The screen changed.' : 'The screen did not change.',
+      ]
+        .filter(Boolean)
+        .join(' '),
       tool: {
         name: result.tool,
         args: displayArgs,
         ok: result.ok,
         result: truncate(result.message, 500),
-        durationMs: result.durationMs,
+        durationMs,
       },
       screenshotId: after?.observation.screenshotId ?? null,
     });
 
     const header = [
-      `Action: ${describeAction(action, true)}`,
+      `Action: ${describeAction(action, true)}${repeat > 1 ? ` ×${repeat}` : ''}`,
       `Mirroir: ${result.ok ? 'OK' : 'FAILED'} — ${truncate(result.message, 300)}`,
+      flicks,
       changed === null
         ? `Could not observe the screen afterwards: ${observeError}`
         : changed
@@ -683,6 +746,37 @@ export class AgentToolkit {
       content: [{ type: 'text', text: header }, ...(after?.content ?? [])],
       isError: !result.ok,
     };
+  }
+
+  /**
+   * Gate before each repeated flick after the first: waits the interval, then
+   * re-checks the budget and the live policy (mode, allowed tools, rules). The
+   * approval given for the batch covers the repetitions only while the policy
+   * asks for nothing new.
+   */
+  private async beforeRepeat(
+    action: DeviceAction,
+    ref: TargetRef,
+    observation: Observation,
+    approved: PolicyDecision,
+    approvalId: string | null,
+    intervalMs: number,
+  ): Promise<{ decision: PolicyDecision } | { stop: string }> {
+    await abortableSleep(intervalMs, this.task.signal);
+    this.assertActive();
+    if (this.actionsUsed >= this.task.maxActions) {
+      return { stop: `the action budget (${this.task.maxActions} actions) is used up` };
+    }
+    const decision = this.decide(action, this.policyTarget(action, ref, observation), observation);
+    if (decision.verdict === 'deny') {
+      this.task.addStep({ type: 'policy', title: 'Repeated flick blocked', detail: decision.reasons.join('\n'), tool: null, screenshotId: null });
+      return { stop: `blocked by iPhone AI's safety policy (${decision.reasons.join(' ')})` };
+    }
+    if (decision.verdict === 'require_approval') {
+      const added = decision.rules.filter((rule) => !approved.rules.includes(rule));
+      if (!approvalId || added.length > 0) return { stop: 'the next flick needs a new approval' };
+    }
+    return { decision };
   }
 
   /** Evaluates the policy against live settings and the given observation. */
@@ -981,21 +1075,60 @@ function focusedFieldGuess(elements: readonly ScreenElement[]): string | null {
   return field?.label ?? null;
 }
 
-export function swipeAction(direction: SwipeDirection, distance: 'short' | 'medium' | 'long', width: number, height: number): DeviceAction {
-  const travel = { short: 0.2, medium: 0.35, long: 0.5 }[distance];
-  const cx = Math.round(width / 2);
-  const cy = Math.round(height / 2);
-  const dy = Math.round((height * travel) / 2);
-  const dx = Math.round((width * travel) / 2);
+export type FlickDistance = 'short' | 'medium' | 'long';
+
+/**
+ * Finger flicks for the AI swipe tool. Mirroir's `swipe` is a synthesized
+ * trackpad scroll with a momentum tail (~2.3 s per call); its `drag` is a real
+ * touch drag with no initial hold, which iOS treats as a finger flick when it
+ * is this fast. Travel is a fraction of the screen dimension along the swipe.
+ */
+export const FLICK: Readonly<Record<FlickDistance, { travel: number; durationMs: number }>> = {
+  short: { travel: 0.25, durationMs: 160 },
+  medium: { travel: 0.4, durationMs: 200 },
+  long: { travel: 0.55, durationMs: 240 },
+};
+/** Flicks stay this far from the top and bottom edges (status bar, Home indicator, Control/Notification Center). */
+export const FLICK_MARGIN_Y = 60;
+/** …and this far from the side edges (the edge-swipe Back gesture). */
+export const FLICK_MARGIN_X = 24;
+
+export function swipeAction(
+  direction: SwipeDirection,
+  distance: FlickDistance,
+  width: number,
+  height: number,
+): Extract<DeviceAction, { kind: 'drag' }> {
+  const { travel, durationMs } = FLICK[distance];
+  const clamp = (value: number, size: number, margin: number) => {
+    const low = Math.min(margin, size / 2);
+    const high = Math.max(size - margin, size / 2);
+    return Math.round(Math.min(high, Math.max(low, value)));
+  };
+  const cx = width / 2;
+  const cy = height / 2;
+  const halfY = (height * travel) / 2;
+  const halfX = (width * travel) / 2;
+  const x = (value: number) => clamp(value, width, FLICK_MARGIN_X);
+  const y = (value: number) => clamp(value, height, FLICK_MARGIN_Y);
+  const flick = (fromX: number, fromY: number, toX: number, toY: number): Extract<DeviceAction, { kind: 'drag' }> => ({
+    kind: 'drag',
+    fromX: x(fromX),
+    fromY: y(fromY),
+    toX: x(toX),
+    toY: y(toY),
+    durationMs,
+    asSwipe: true,
+  });
   switch (direction) {
     case 'up':
-      return { kind: 'swipe', fromX: cx, fromY: cy + dy, toX: cx, toY: cy - dy, durationMs: 300 };
+      return flick(cx, cy + halfY, cx, cy - halfY);
     case 'down':
-      return { kind: 'swipe', fromX: cx, fromY: cy - dy, toX: cx, toY: cy + dy, durationMs: 300 };
+      return flick(cx, cy - halfY, cx, cy + halfY);
     case 'left':
-      return { kind: 'swipe', fromX: cx + dx, fromY: cy, toX: cx - dx, toY: cy, durationMs: 300 };
+      return flick(cx + halfX, cy, cx - halfX, cy);
     case 'right':
-      return { kind: 'swipe', fromX: cx - dx, fromY: cy, toX: cx + dx, toY: cy, durationMs: 300 };
+      return flick(cx - halfX, cy, cx + halfX, cy);
   }
 }
 
@@ -1008,7 +1141,7 @@ function actionSignature(action: DeviceAction): string {
       return `${action.kind}:${round(action.x)},${round(action.y)}`;
     case 'swipe':
     case 'drag':
-      return `${action.kind}:${round(action.fromX)},${round(action.fromY)}>${round(action.toX)},${round(action.toY)}`;
+      return `${action.kind === 'drag' && action.asSwipe ? 'flick' : action.kind}:${round(action.fromX)},${round(action.fromY)}>${round(action.toX)},${round(action.toY)}`;
     case 'type_text':
       return `type:${action.text}`;
     case 'press_key':

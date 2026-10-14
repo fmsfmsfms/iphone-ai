@@ -19,6 +19,7 @@ import type { AgentServiceApi, AppContext, WorkflowServiceApi } from '../../src/
 import { SettingsStore } from '../../src/core/settings-store.js';
 import { Database } from '../../src/db/database.js';
 import type { DeviceController } from '../../src/device/device-controller.js';
+import { LiveCapture } from '../../src/device/live-capture.js';
 import type { ScreenStream } from '../../src/device/screen-stream.js';
 import { AuthService } from '../../src/http/auth.js';
 import { createHttpServer, type HttpServerHandle } from '../../src/http/server.js';
@@ -63,6 +64,7 @@ function fakeStatus(stopLatched: boolean): DeviceStatus {
 
 export function createFakes() {
   let stopLatched = false;
+  let frameSeq = 0;
   const actionResult: ActionResult = { ok: true, tool: 'tap', durationMs: 12, message: 'Tapped', focusChanged: false };
   const device = {
     perform: vi.fn(async () => actionResult),
@@ -75,7 +77,12 @@ export function createFakes() {
     refocusApp: vi.fn(),
     checkHealth: vi.fn(async () => ({ ok: true, text: 'All checks passed' })),
     getStatus: vi.fn(() => fakeStatus(stopLatched)),
-    getLatestFrame: vi.fn(() => null),
+    getLatestFrame: vi.fn((): { meta: { seq: number; mimeType: string; source?: string }; data: Buffer } | null => null),
+    nextFrameSeq: vi.fn(() => {
+      frameSeq += 1;
+      return frameSeq;
+    }),
+    geometry: null,
     get isStopLatched() {
       return stopLatched;
     },
@@ -101,6 +108,8 @@ export function createFakes() {
     viewers: 0,
     consecutiveErrors: 0,
     lastError: null,
+    liveAvailable: false,
+    liveError: null,
   };
   const stream = {
     setViewer: vi.fn(),
@@ -137,7 +146,16 @@ export interface Harness {
   close(): Promise<void>;
 }
 
-export async function createHarness(options: { webDistDir?: string | null } = {}): Promise<Harness> {
+export interface HarnessOptions {
+  webDistDir?: string | null;
+  /**
+   * Builds ctx.live (default: a LiveCapture without a helper, i.e. unavailable).
+   * Tests pass one backed by the FAKE capture helper.
+   */
+  live?: (deps: { device: Fakes['device']; settings: SettingsStore; hub: EventHub }) => LiveCapture;
+}
+
+export async function createHarness(options: HarnessOptions = {}): Promise<Harness> {
   const dataDir = mkdtempSync(path.join(tmpdir(), 'iphone-ai-http-'));
   const paths = resolveAppPaths({ dataDir, webDistDir: options.webDistDir ?? null });
   ensureAppDirectories(paths);
@@ -149,6 +167,9 @@ export async function createHarness(options: { webDistDir?: string | null } = {}
   const secrets = new MemorySecretStore();
   const screenshots = new ScreenshotStore(db, paths, settings);
   const fakes = createFakes();
+  const live = options.live
+    ? options.live({ device: fakes.device, settings, hub })
+    : new LiveCapture({ device: fakes.device, settings, hub, log: silentLogger, helper: null, unavailableReason: 'test harness' });
   const ctx: AppContext = {
     version: '0.1.0-test',
     sessionId: 'app_session_test',
@@ -162,6 +183,7 @@ export async function createHarness(options: { webDistDir?: string | null } = {}
     mirroir: fakes.mirroir as unknown as MirroirManager,
     device: fakes.device as unknown as DeviceController,
     stream: fakes.stream as unknown as ScreenStream,
+    live,
     approvals,
     screenshots,
     agents: fakes.agents as unknown as AgentServiceApi,
@@ -202,6 +224,7 @@ export async function createHarness(options: { webDistDir?: string | null } = {}
       });
     },
     async close() {
+      await live.shutdown();
       for (const server of extra) await server.close();
       await local.close();
       db.close();

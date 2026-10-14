@@ -6,8 +6,8 @@
 //! for `LISTENING <port>` on stdout, then points the main window at
 //! `http://127.0.0.1:<port>/auth/desktop?token=…`. stdin stays an open pipe for
 //! the backend's whole life: it exits on EOF, so it never outlives this app.
-//! On quit the whole group (node, Mirroir, osascript, …) gets SIGTERM, then
-//! SIGKILL after 3 s. Early exits and startup timeouts show the error page.
+//! On quit the whole group (node, Mirroir, osascript, the capture helper, …) gets
+//! SIGTERM, then SIGKILL after 3 s. Early exits and startup timeouts show the error page.
 
 use std::collections::{HashMap, VecDeque};
 use std::ffi::OsString;
@@ -42,6 +42,9 @@ const TITLE_STOPPED: &str = "iPhone AI stopped working";
 pub struct ShellPaths {
     /// `Contents/MacOS/node` (externalBin, target-triple suffix removed by the bundler).
     pub node: PathBuf,
+    /// `Contents/MacOS/iphone-ai-capture` (externalBin): the ScreenCaptureKit live-view
+    /// helper the backend spawns while someone watches the screen.
+    pub capture: PathBuf,
     pub server_script: PathBuf,
     pub web_dir: PathBuf,
     pub claude_code: PathBuf,
@@ -61,6 +64,7 @@ impl ShellPaths {
         });
         Self {
             node: exe_dir.join("node"),
+            capture: exe_dir.join("iphone-ai-capture"),
             server_script: resource_dir.join("server/server.mjs"),
             web_dir: resource_dir.join("web"),
             claude_code: resource_dir.join("claude-code/claude"),
@@ -219,6 +223,12 @@ impl Backend {
             self.paths.node.display(),
             self.paths.server_script.display()
         ));
+        if !self.paths.capture.is_file() {
+            self.shell_log(&format!(
+                "live capture helper missing ({}); the live view will poll screenshots",
+                self.paths.capture.display()
+            ));
+        }
         if let Err(message) = self.spawn_backend(generation) {
             self.fail(generation, TITLE_START_FAILED, message);
         }
@@ -346,9 +356,7 @@ impl Backend {
             ("IPHONE_AI_BUNDLE_ID".into(), self.bundle_id.clone().into()),
             ("IPHONE_AI_LOG_FILE".into(), paths.log_file.clone().into_os_string()),
         ];
-        if paths.claude_code.is_file() {
-            env.push(("IPHONE_AI_CLAUDE_CODE_BIN".into(), paths.claude_code.clone().into_os_string()));
-        }
+        env.extend(bundled_tool_environment(paths));
         env
     }
 
@@ -495,6 +503,17 @@ impl Backend {
     }
 }
 
+/// Optional bundled tools, announced to the backend only when the file exists:
+/// the Claude Code binary (Claude Agent SDK provider) and the ScreenCaptureKit
+/// live-view helper (without it the backend keeps polling Mirroir screenshots).
+fn bundled_tool_environment(paths: &ShellPaths) -> Vec<(OsString, OsString)> {
+    [("IPHONE_AI_CLAUDE_CODE_BIN", &paths.claude_code), ("IPHONE_AI_CAPTURE_BIN", &paths.capture)]
+        .into_iter()
+        .filter(|(_, path)| path.is_file())
+        .map(|(key, path)| (OsString::from(key), path.clone().into_os_string()))
+        .collect()
+}
+
 /// Reads a pipe to EOF line by line (lossy UTF-8, overlong lines split), so the
 /// backend can never block on a full pipe.
 fn read_lines(stream: impl Read, mut on_line: impl FnMut(&str)) {
@@ -511,7 +530,6 @@ fn read_lines(stream: impl Read, mut on_line: impl FnMut(&str)) {
     }
 }
 
-/// `LISTENING <port>` -> port.
 /// Folders macOS protects with a per-app privacy prompt ("Files and Folders").
 /// A bundled helper reading its own files there blocks until someone answers.
 fn protected_folder(executable: &Path, home: &Path) -> Option<&'static str> {
@@ -524,6 +542,7 @@ fn protected_folder(executable: &Path, home: &Path) -> Option<&'static str> {
     FOLDERS.iter().find(|(dir, _)| executable.starts_with(home.join(dir))).map(|(_, name)| *name)
 }
 
+/// `LISTENING <port>` -> port.
 fn parse_listening(line: &str) -> Option<u16> {
     let port = line.trim().strip_prefix("LISTENING ")?.trim();
     port.parse::<u16>().ok().filter(|port| *port != 0)
@@ -661,6 +680,37 @@ mod tests {
         assert_eq!(structured_log_summary("Fatal: boom"), None);
         assert_eq!(structured_log_summary(r#"{"level":"info"}"#), None);
         assert_eq!(structured_log_summary("{not json"), None);
+    }
+
+    #[test]
+    fn announces_only_bundled_tools_that_exist() {
+        let dir = std::env::temp_dir().join(format!("iphone-ai-shell-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let paths = ShellPaths {
+            node: dir.join("node"),
+            capture: dir.join("iphone-ai-capture"),
+            server_script: dir.join("server/server.mjs"),
+            web_dir: dir.join("web"),
+            claude_code: dir.join("claude-code/claude"),
+            data_dir: dir.join("data"),
+            log_file: dir.join("data/logs/backend.log"),
+        };
+        assert!(bundled_tool_environment(&paths).is_empty());
+
+        std::fs::write(&paths.capture, b"").unwrap();
+        let env = bundled_tool_environment(&paths);
+        assert_eq!(env, vec![(OsString::from("IPHONE_AI_CAPTURE_BIN"), paths.capture.clone().into_os_string())]);
+
+        std::fs::create_dir_all(dir.join("claude-code")).unwrap();
+        std::fs::write(&paths.claude_code, b"").unwrap();
+        let keys: Vec<OsString> = bundled_tool_environment(&paths).into_iter().map(|(key, _)| key).collect();
+        assert_eq!(keys, vec![OsString::from("IPHONE_AI_CLAUDE_CODE_BIN"), OsString::from("IPHONE_AI_CAPTURE_BIN")]);
+
+        // A directory with the helper's name is not the helper.
+        std::fs::remove_file(&paths.capture).unwrap();
+        std::fs::create_dir_all(&paths.capture).unwrap();
+        assert!(!bundled_tool_environment(&paths).iter().any(|(key, _)| key == "IPHONE_AI_CAPTURE_BIN"));
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

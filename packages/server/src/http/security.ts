@@ -1,8 +1,8 @@
 // Request gatekeeping, run before anything else on every request:
 //  1. Host header must be the address this listener serves (DNS-rebinding defence) → 421
-//  2. Origin, when present (always for /ws), must be this listener's origin → 403
+//  2. Origin, when present (always for /ws and /ws/screen), must be this listener's origin → 403
 //  3. State-changing methods must carry the x-iphone-ai header (CSRF defence) → 403
-//  4. /api/* (except health and remote-login) and /ws need a valid session cookie → 401
+//  4. /api/* (except health and remote-login), /ws and /ws/screen need a valid session cookie → 401
 // plus security headers on every response.
 //
 // The router (find-my-way) percent-decodes paths and accepts absolute-form
@@ -12,13 +12,15 @@
 // targets ("/path") are accepted.
 
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
-import { CSRF_HEADER, SESSION_COOKIE, WS_PATH } from '@iphone-ai/shared';
+import { CSRF_HEADER, SESSION_COOKIE, WS_PATH, WS_SCREEN_PATH } from '@iphone-ai/shared';
 
 import { readCookie, type AuthService, type ListenerKind } from './auth.js';
 import { HttpError } from './errors.js';
 import { pathOf } from './guards.js';
 
 const STATE_CHANGING = new Set(['POST', 'PUT', 'DELETE', 'PATCH']);
+/** WebSocket endpoints: event stream and binary live frames. */
+const WS_PATHS: ReadonlySet<string> = new Set([WS_PATH, WS_SCREEN_PATH]);
 
 export interface SecurityOptions {
   listener: ListenerKind;
@@ -40,7 +42,7 @@ function isPublic(method: string, path: string): boolean {
 }
 
 export function needsSession(method: string, path: string): boolean {
-  if (path === WS_PATH) return true;
+  if (WS_PATHS.has(path)) return true;
   if (!isApiPath(path)) return false;
   return !isPublic(method, path);
 }
@@ -123,7 +125,7 @@ export function installSecurityHooks(app: FastifyInstance, options: SecurityOpti
       throw new HttpError(503, 'remote_disabled', 'Remote access is turned off on the Mac.');
     }
 
-    const isWs = views.includes(WS_PATH);
+    const isWs = views.some((view) => WS_PATHS.has(view));
     const origin = request.headers.origin;
     if (origin !== undefined) {
       const normalized = origin.trim().toLowerCase();

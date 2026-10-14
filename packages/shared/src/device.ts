@@ -100,22 +100,47 @@ export interface DeviceStatus {
   lastFocusSteal: number | null;
 }
 
-/** Metadata for one captured screenshot frame. Frames are polled screenshots, never a video stream. */
+/** Where a frame came from: a polled Mirroir `screenshot` (PNG) or the ScreenCaptureKit live helper (JPEG). */
+export type FrameSource = 'mirroir-screenshot' | 'screencapturekit';
+
+/**
+ * Metadata for one captured frame. Frames are either polled Mirroir
+ * screenshots or JPEG frames from the ScreenCaptureKit live capture helper.
+ * Both share one sequence space (a higher `seq` is always a newer frame).
+ */
 export interface FrameMeta {
   seq: number;
   capturedAt: number;
-  /** Wall time the screenshot tool call took. */
+  /** Wall time the screenshot tool call took (live frames: capture → backend). */
   latencyMs: number;
   widthPx: number;
   heightPx: number;
   mimeType: string;
   /** Pixels per point (usually 2 on Retina). Null when geometry is unknown. */
   pxPerPt: number | null;
+  /** Live frames: only set when the captured window size equals Mirroir's current status geometry. */
   geometry: WindowGeometry | null;
+  source?: FrameSource;
+  /** When the backend received the frame (live frames). */
+  receivedAt?: number;
 }
 
+/**
+ * Header of every binary message on the `/ws/screen` WebSocket:
+ * `[4-byte big-endian uint32 H][H bytes UTF-8 JSON LiveFrameHeader][JPEG bytes]`.
+ */
+export type LiveFrameHeader = FrameMeta & {
+  mimeType: 'image/jpeg';
+  source: 'screencapturekit';
+  receivedAt: number;
+};
+
+/** How the live viewer currently gets frames. */
+export type StreamMode = 'polling-screenshots' | 'live-screencapturekit';
+
 export interface StreamStats {
-  mode: 'polling-screenshots';
+  /** 'live-screencapturekit' only while live frames are actually arriving (one within the last 2 s). */
+  mode: StreamMode;
   running: boolean;
   /** Target frames per second requested by the current policy (active vs idle). */
   targetFps: number;
@@ -127,6 +152,10 @@ export interface StreamStats {
   viewers: number;
   consecutiveErrors: number;
   lastError: string | null;
+  /** A ScreenCaptureKit capture helper is installed and live capture is enabled in settings. */
+  liveAvailable: boolean;
+  /** Why live capture is not delivering (helper missing, permission, crash…); null when fine or not needed. */
+  liveError: string | null;
 }
 
 export interface ScreenElement {

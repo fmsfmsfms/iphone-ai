@@ -1,9 +1,16 @@
-// Throttled screenshot polling for the live viewer.
+// Frames for the live viewer.
 //
-// This is NOT video: each frame is one Mirroir `screenshot` call. The stream
-// runs only while a viewer is visible, Screen Recording is confirmed and
-// Mirroring is connected; it drops to an idle rate after inactivity and backs
-// off on errors. Measured FPS and latency are reported honestly.
+// Two sources:
+//  • live capture (LiveCapture): ScreenCaptureKit JPEG frames from the helper,
+//    relayed over /ws/screen. Runs beside Mirroir, so its lane stays free.
+//  • polling (this class): each frame is one Mirroir `screenshot` call. It
+//    runs only while a viewer is visible, Screen Recording is confirmed and
+//    Mirroring is connected; it drops to an idle rate after inactivity and
+//    backs off on errors.
+// Polling pauses while live frames are actually arriving (one within the last
+// 2 s) and resumes on its own when they stop (helper missing, failed,
+// restarting, or simply nothing changed on screen). Measured FPS and latency
+// are reported honestly for whichever source is in charge.
 
 import type { StreamStats } from '@iphone-ai/shared';
 
@@ -11,6 +18,7 @@ import type { EventHub } from '../core/events.js';
 import type { Logger } from '../core/logger.js';
 import type { SettingsStore } from '../core/settings-store.js';
 import { DeviceError, type DeviceController } from './device-controller.js';
+import { LIVE_ACTIVE_REASON, type LiveCapture } from './live-capture.js';
 
 interface ViewerState {
   visible: boolean;
@@ -30,6 +38,7 @@ export class ScreenStream {
   private pausedReason: string | null = null;
   private lastFrameAt: number | null = null;
   private statsTimer: NodeJS.Timeout | null = null;
+  private statsSoonTimer: NodeJS.Timeout | null = null;
   private readonly log: Logger;
   private stopped = false;
 
@@ -38,14 +47,24 @@ export class ScreenStream {
     private readonly settings: SettingsStore,
     private readonly hub: EventHub,
     log: Logger,
+    private readonly live: LiveCapture | null = null,
   ) {
     this.log = log.child('stream');
-    device.on('frame', () => {
+    device.on('frame', (frame: { meta: { capturedAt: number; latencyMs: number }; data: Buffer }) => {
       this.lastFrameAt = Date.now();
+      this.live?.notePolledFrame(frame);
     });
     device.on('action', () => this.markActivity(4000));
     device.on('mirroring', () => this.schedule(200));
     device.on('permissions', () => this.schedule(200));
+    if (live) {
+      live.setViewerSource(() => this.visibleViewers());
+      // Live frames started or stopped arriving, or the helper changed state.
+      live.on('state', () => {
+        this.schedule(100);
+        this.publishStatsSoon();
+      });
+    }
   }
 
   start(): void {
@@ -59,14 +78,22 @@ export class ScreenStream {
     this.stopped = true;
     if (this.timer) clearTimeout(this.timer);
     if (this.statsTimer) clearInterval(this.statsTimer);
+    if (this.statsSoonTimer) clearTimeout(this.statsSoonTimer);
     this.timer = null;
+    this.statsSoonTimer = null;
   }
 
   setViewer(id: string, state: ViewerState | null): void {
     if (state) this.viewers.set(id, state);
     else this.viewers.delete(id);
     if (state?.visible) this.markActivity();
+    this.live?.evaluate();
     this.schedule(100);
+  }
+
+  /** Number of UIs currently showing the screen. */
+  visibleViewerCount(): number {
+    return this.visibleViewers();
   }
 
   /** User or AI activity: run at the active rate (optionally boosted briefly after actions). */
@@ -84,6 +111,8 @@ export class ScreenStream {
 
   /** Target FPS for the current situation, or 0 when polling should pause. */
   private targetFps(): { fps: number; reason: string | null } {
+    // Live frames are arriving: Mirroir's lane stays free for actions.
+    if (this.live?.isDelivering()) return { fps: 0, reason: LIVE_ACTIVE_REASON };
     const cfg = this.settings.get().connection.screenshot;
     const status = this.device.getStatus();
     if (status.server.state !== 'ready') return { fps: 0, reason: 'Mirroir MCP server is not ready' };
@@ -161,21 +190,53 @@ export class ScreenStream {
     const avgLatencyMs = this.latencies.length
       ? Math.round(this.latencies.reduce((a, b) => a + b, 0) / this.latencies.length)
       : 0;
+    const live = this.live?.stats() ?? null;
+    const lastFrameAt =
+      live?.lastFrameAt != null && (this.lastFrameAt === null || live.lastFrameAt > this.lastFrameAt) ? live.lastFrameAt : this.lastFrameAt;
+    if (live?.delivering) {
+      // Honest numbers for the source actually in charge: frames received from the helper.
+      return {
+        mode: 'live-screencapturekit',
+        running: true,
+        targetFps: live.targetFps,
+        measuredFps: live.measuredFps,
+        avgLatencyMs: live.avgLatencyMs,
+        lastFrameAt,
+        pausedReason: LIVE_ACTIVE_REASON,
+        viewers: this.visibleViewers(),
+        consecutiveErrors: this.consecutiveErrors,
+        lastError: this.lastError,
+        liveAvailable: live.available,
+        liveError: null,
+      };
+    }
     return {
       mode: 'polling-screenshots',
       running: fps > 0,
       targetFps: fps,
       measuredFps: Math.round(measuredFps * 100) / 100,
       avgLatencyMs,
-      lastFrameAt: this.lastFrameAt,
+      lastFrameAt,
       pausedReason: this.pausedReason,
       viewers: this.visibleViewers(),
       consecutiveErrors: this.consecutiveErrors,
       lastError: this.lastError,
+      liveAvailable: live?.available ?? false,
+      liveError: live?.error ?? null,
     };
   }
 
   private publishStats(): void {
     this.hub.publish({ type: 'stream_stats', stats: this.stats() });
+  }
+
+  /** Coalesces bursts of live-capture state changes into one stats event. */
+  private publishStatsSoon(): void {
+    if (this.stopped || this.statsSoonTimer) return;
+    this.statsSoonTimer = setTimeout(() => {
+      this.statsSoonTimer = null;
+      this.publishStats();
+    }, 50);
+    this.statsSoonTimer.unref();
   }
 }

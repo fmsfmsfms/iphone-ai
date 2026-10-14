@@ -14,6 +14,7 @@ import {
 import { Button, Tooltip } from '@heroui/react';
 import type { ReactNode } from 'react';
 
+import logoUrl from '../assets/logo.png';
 import { KbdHint } from '../components/KbdHint';
 import { useI18n } from '../lib/i18n';
 import { navigate, SECTION_ORDER, type Route, type RouteName } from '../lib/router';
@@ -70,9 +71,13 @@ export function Sidebar({ route, collapsed, onToggleCollapsed, onShowShortcuts }
       ].join(' ')}
     >
       <div className={['flex h-14 items-center gap-2.5 border-b border-hairline', collapsed ? 'justify-center px-2' : 'px-4'].join(' ')}>
-        <span aria-hidden className="ai-gradient-bg flex size-8 shrink-0 items-center justify-center rounded-[10px] text-white shadow-[0_4px_14px_rgb(94_92_230/0.35)] [&>svg]:size-4">
-          <Smartphone />
-        </span>
+        <img
+          src={logoUrl}
+          alt=""
+          aria-hidden
+          draggable={false}
+          className="h-[26px] w-auto shrink-0 select-none drop-shadow-[0_2px_8px_rgb(47_107_234/0.35)]"
+        />
         {!collapsed ? (
           <div className="min-w-0 leading-tight">
             <p className="truncate text-[14px] font-semibold tracking-tight text-foreground">{t('app.name')}</p>

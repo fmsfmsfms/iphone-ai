@@ -49,9 +49,22 @@ body {
 }
 
 .mark {
-  width: 96px;
-  height: 128px;
-  filter: drop-shadow(0 0 18px rgba(99, 102, 241, 0.55)) drop-shadow(0 0 42px rgba(168, 85, 247, 0.25));
+  width: 168px;
+  height: auto;
+  filter: drop-shadow(0 6px 22px rgba(47, 107, 234, 0.45));
+  animation: breathe 2.8s ease-in-out infinite;
+}
+
+@keyframes breathe {
+  0%,
+  100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+  50% {
+    transform: scale(1.035);
+    opacity: 0.92;
+  }
 }
 
 .mark-spark {
@@ -236,6 +249,7 @@ pre {
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .mark,
   .mark-spark,
   .progress span {
     animation: none;

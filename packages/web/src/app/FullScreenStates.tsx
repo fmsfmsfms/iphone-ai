@@ -2,10 +2,11 @@
 // expired (local listener), passcode sign-in (remote listener), backend
 // unreachable.
 
-import { ArrowsRotateRight, LockFill, PlugConnection, Smartphone, TriangleExclamationFill } from '@gravity-ui/icons';
+import { ArrowsRotateRight, LockFill, PlugConnection, TriangleExclamationFill } from '@gravity-ui/icons';
 import { Button, Description, Input, Label, Spinner, TextField } from '@heroui/react';
 import { useRef, useState, type FormEvent, type ReactNode } from 'react';
 
+import logoUrl from '../assets/logo.png';
 import { useNow } from '../components/RelativeTime';
 import { api, ApiError } from '../lib/api';
 import { useI18n, type MessageVars } from '../lib/i18n';
@@ -18,6 +19,7 @@ function Frame({ icon, tone, title, children, actions }: { icon: ReactNode; tone
   return (
     <div className="flex h-full items-center justify-center bg-background p-6">
       <div className="app-panel w-full max-w-md p-8 text-center shadow-[0_30px_80px_rgb(0_0_0/0.45)]">
+        <img src={logoUrl} alt="" aria-hidden draggable={false} className="mx-auto mb-6 h-9 w-auto select-none drop-shadow-[0_4px_16px_rgb(47_107_234/0.4)]" />
         <span aria-hidden className={['mx-auto flex size-14 items-center justify-center rounded-2xl [&>svg]:size-6', toneClass].join(' ')}>
           {icon}
         </span>
@@ -33,9 +35,7 @@ export function Splash() {
   const { t } = useI18n();
   return (
     <div className="flex h-full flex-col items-center justify-center gap-5 bg-background" role="status" aria-live="polite">
-      <span aria-hidden className="ai-gradient-bg flex size-14 items-center justify-center rounded-2xl text-white shadow-[0_10px_40px_rgb(94_92_230/0.35)] [&>svg]:size-6">
-        <Smartphone />
-      </span>
+      <img src={logoUrl} alt="" aria-hidden draggable={false} className="h-14 w-auto select-none drop-shadow-[0_8px_30px_rgb(47_107_234/0.45)]" />
       <div className="flex items-center gap-2.5 text-[13px] text-muted">
         <Spinner size="sm" />
         {t('boot.connecting')}

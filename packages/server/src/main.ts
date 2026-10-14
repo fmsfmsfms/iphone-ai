@@ -9,6 +9,9 @@
 //   IPHONE_AI_BUNDLE_ID       set by the desktop app; enables re-focusing it and
 //                             exiting when the app closes our stdin
 //   IPHONE_AI_CLAUDE_CODE_BIN bundled Claude Code binary (Claude Agent SDK provider)
+//   IPHONE_AI_CAPTURE_BIN     bundled ScreenCaptureKit live capture helper (iphone-ai-capture);
+//                             in development <repo>/src-tauri/binaries/iphone-ai-capture-<arch>-apple-darwin
+//                             is used when it exists. Without a helper, screenshot polling stays in charge.
 //   IPHONE_AI_MIRROIR_MOCK    path to the mock Mirroir server — TESTS/CI ONLY; the UI
 //                             and logs label the session as mock
 // Prints "LISTENING <port>" on stdout once the HTTP server is ready.
@@ -31,6 +34,7 @@ import type { AppContext } from './core/services.js';
 import { SettingsStore } from './core/settings-store.js';
 import { Database } from './db/database.js';
 import { DeviceController } from './device/device-controller.js';
+import { LiveCapture, resolveCaptureHelper } from './device/live-capture.js';
 import { ScreenStream } from './device/screen-stream.js';
 import { startLocalServer } from './http/server.js';
 import { MirroirManager } from './mcp/mirroir-manager.js';
@@ -98,7 +102,16 @@ async function main(): Promise<void> {
     log,
     mockServer ? { screenRecording: 'granted', accessibility: 'granted', source: 'mock Mirroir (assumed, not a real device)' } : null,
   );
-  const stream = new ScreenStream(device, settings, hub, log);
+  const captureHelper = resolveCaptureHelper({ mock: Boolean(mockServer) });
+  const live = new LiveCapture({
+    device,
+    settings,
+    hub,
+    log,
+    helper: captureHelper.helper,
+    unavailableReason: captureHelper.reason,
+  });
+  const stream = new ScreenStream(device, settings, hub, log, live);
   const approvals = new ApprovalBroker(db, hub, activity);
   const screenshots = new ScreenshotStore(db, paths, settings);
   const agents = new AgentService({ db, settings, secrets, hub, activity, device, approvals, screenshots, paths, log });
@@ -117,6 +130,7 @@ async function main(): Promise<void> {
     mirroir,
     device,
     stream,
+    live,
     approvals,
     screenshots,
     agents,
@@ -150,6 +164,7 @@ async function main(): Promise<void> {
   process.stdout.write(`LISTENING ${server.port}\n`);
 
   device.start();
+  live.start();
   stream.start();
   void mirroir.start().catch((err: unknown) => log.error('Mirroir failed to start', { error: String(err) }));
 
@@ -166,6 +181,7 @@ async function main(): Promise<void> {
     if (run) workflows.stop(run.id, 'iPhone AI is closing.');
     approvals.cancelAll('iPhone AI is closing');
     stream.stop();
+    await live.shutdown().catch(() => undefined);
     device.stopMonitoring();
     activity.record({ category: 'session', type: 'session.ended', actor: 'system', summary: `iPhone AI stopped (${reason}).` });
     // SIGTERM lets Mirroir release any held touch or key before exiting.
@@ -175,6 +191,8 @@ async function main(): Promise<void> {
     db.close();
     process.exit(0);
   };
+  // Last resort: the capture helper must never outlive the backend.
+  process.on('exit', () => live.killNow());
   process.on('SIGTERM', () => void shutdown('SIGTERM'));
   process.on('SIGINT', () => void shutdown('SIGINT'));
   if (process.env.IPHONE_AI_BUNDLE_ID) {

@@ -2,12 +2,14 @@
 
 ## Platform (Apple / Mirroir)
 
-- **Not video.** The live viewer polls Mirroir's `screenshot` tool (≈2 fps active by
-  default). Each frame is a full PNG capture; FPS and latency are shown as measured.
-  A ScreenCaptureKit stream of the Mirroring window could be smoother, but it needs
-  its own Screen Recording grant and capture code; it was investigated but **not
-  implemented**, because it could not be proven reliable on this machine without that
-  grant (see "ScreenCaptureKit" below).
+- **Live view needs its own Screen Recording grant.** The viewer streams the iPhone
+  Mirroring window with ScreenCaptureKit (the bundled `iphone-ai-capture` helper, up to
+  30 fps). Without the grant, or if the helper fails, it falls back to polling Mirroir's
+  `screenshot` tool (≈2 fps, PNG over MCP). The viewer shows which source is live and the
+  measured FPS/latency.
+- **Every input action costs ~0.6 s of window activation.** Mirroir brings iPhone
+  Mirroring to the front and waits for macOS to settle before each tap or gesture. This
+  is inside Mirroir and is not changed by iPhone AI.
 - **Focus stealing.** Every input action makes iPhone Mirroring the frontmost app
   (macOS delivers synthetic input only to the frontmost app). iPhone AI can re-focus
   itself after manual actions, but focus still moves briefly. Avoid typing elsewhere on
@@ -50,14 +52,13 @@
 - Small local models often cannot drive multi-step tasks reliably or lack tool calling.
 - Cloud providers receive screenshots/on-screen text during tasks (disclosed in the app).
 
-## ScreenCaptureKit investigation
+## Live view (ScreenCaptureKit)
 
-Mirroir already captures with `SCScreenshotManager` per screenshot. A continuous
-`SCStream` on the iPhone Mirroring window (via a small Swift helper streaming JPEG frames)
-would allow ~15–30 fps preview. Requirements: Screen Recording permission for iPhone AI,
-the window being shareable, and a helper binary signed with the app. Because Screen
-Recording was not granted in the build environment, reliability could not be measured, so
-the feature was not shipped. Polling remains the honest, verified path.
+The `iphone-ai-capture` helper captures only the Mirroring window, never posts input and
+never presses Resume. Frames are used for display only: the AI and touch mapping still use
+Mirroir's own screenshots and window geometry, so a stale or mismatched live frame cannot
+misplace a tap. Polling pauses only while live frames actually arrive (one within the last
+2 s) and resumes on its own when they stop.
 
 ## Not yet verified on a real device
 

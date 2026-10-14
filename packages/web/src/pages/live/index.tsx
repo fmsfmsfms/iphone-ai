@@ -1,6 +1,7 @@
 // Live Control: device panel | phone viewer | assistant, in three resizable
 // panes whose layout is remembered. Shortcuts: R refresh, M manual control,
-// T focus the type-text field.
+// T focus the type-text field; with the phone screen focused, the arrow keys
+// flick (handled by the viewer's TouchSurface).
 
 import './messages';
 

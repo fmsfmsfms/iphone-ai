@@ -33,6 +33,7 @@ import { registerWorkflowRoutes } from './routes/workflows.js';
 import { installSecurityHooks, needsSession } from './security.js';
 import { registerStaticUi } from './static-ui.js';
 import { registerWebSocket } from './ws.js';
+import { registerScreenWebSocket } from './ws-screen.js';
 
 const LOCAL_BIND_HOST = '127.0.0.1';
 const BODY_LIMIT_BYTES = 2 * 1024 * 1024;
@@ -166,6 +167,7 @@ export function createHttpServer(ctx: AppContext, options: CreateHttpServerOptio
     registerSettingsRoutes(instance, deps);
     registerRemoteRoutes(instance, deps);
     registerWebSocket(instance, deps);
+    registerScreenWebSocket(instance, deps);
   });
 
   return {

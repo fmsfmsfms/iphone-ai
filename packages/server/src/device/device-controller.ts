@@ -136,6 +136,8 @@ const TASK_CANCELLED_MESSAGE = 'The task was cancelled before this action ran.';
 const LEASE_PAUSED_MESSAGE = 'The task was paused before this action ran; it was not executed.';
 
 const POINTER_KINDS = new Set(['tap', 'double_tap', 'long_press', 'swipe', 'drag']);
+/** Max wait for the screen to settle before an AI observation (Mirroir screenshot settle_ms). */
+export const DESCRIBE_SETTLE_MS = 700;
 /** Tools that make iPhone Mirroring the frontmost app (focus leaves iPhone AI). */
 const FOCUS_STEALING_TOOLS = new Set(['tap', 'double_tap', 'long_press', 'swipe', 'drag', 'type_text', 'press_key', 'launch_app', 'scroll_to', 'press_back']);
 
@@ -248,6 +250,15 @@ export class DeviceController extends EventEmitter {
 
   getLatestFrame(): Frame | null {
     return this.latestFrame;
+  }
+
+  /**
+   * Allocates a frame sequence number. Live capture frames share the sequence
+   * with Mirroir screenshots, so a higher seq is always the newer frame.
+   */
+  nextFrameSeq(): number {
+    this.frameSeq += 1;
+    return this.frameSeq;
   }
 
   /** Screenshots are only safe once Screen Recording is confirmed: without it Mirroir's fallback activates iPhone Mirroring (focus steal). */
@@ -782,9 +793,8 @@ export class DeviceController extends EventEmitter {
     const data = Buffer.from(base64, 'base64');
     const dims = base64PngDimensions(base64) ?? { width: 0, height: 0 };
     const geometry = this.mirroring.geometry;
-    this.frameSeq += 1;
     const meta: FrameMeta = {
-      seq: this.frameSeq,
+      seq: this.nextFrameSeq(),
       capturedAt: Date.now(),
       latencyMs,
       widthPx: dims.width,
@@ -792,6 +802,7 @@ export class DeviceController extends EventEmitter {
       mimeType,
       pxPerPt: geometry && dims.width > 0 ? dims.width / geometry.widthPt : null,
       geometry,
+      source: 'mirroir-screenshot',
     };
     const frame: Frame = { meta, data };
     this.latestFrame = frame;
@@ -803,6 +814,11 @@ export class DeviceController extends EventEmitter {
   /**
    * OCR description of the screen (Mirroir describe_screen, never with
    * scroll:true — that variant really swipes the phone).
+   *
+   * `settleFirst` first waits (up to DESCRIBE_SETTLE_MS) for the screen to
+   * stop changing. The wait is capped short on purpose: on moving content
+   * (videos, feeds) it never settles and the full wait would be added to
+   * every AI step.
    */
   async describe(options: { includeImage?: boolean; settleFirst?: boolean; allowResume?: boolean } = {}): Promise<ScreenDescription> {
     this.assertCaptureAllowed(options.allowResume === true);
@@ -810,7 +826,7 @@ export class DeviceController extends EventEmitter {
       const allowResume = options.allowResume === true;
       if (options.settleFirst) {
         await this.assertCaptureAllowedLive(allowResume);
-        const settled = await this.mirroir.call('screenshot', { settle_ms: 1500 }, { timeoutMs: this.readTimeout(25000) });
+        const settled = await this.mirroir.call('screenshot', { settle_ms: DESCRIBE_SETTLE_MS }, { timeoutMs: this.readTimeout(25000) });
         if (settled.ok && settled.images[0]) this.storeFrame(settled.images[0].data, settled.images[0].mimeType, settled.durationMs);
       }
       // Re-read after the settle wait too: Mirroring may have paused meanwhile.
@@ -949,7 +965,7 @@ export function describeAction(action: DeviceAction, showTypedText = false): str
     case 'swipe':
       return `Swipe from (${Math.round(action.fromX)}, ${Math.round(action.fromY)}) to (${Math.round(action.toX)}, ${Math.round(action.toY)})`;
     case 'drag':
-      return `Drag from (${Math.round(action.fromX)}, ${Math.round(action.fromY)}) to (${Math.round(action.toX)}, ${Math.round(action.toY)})`;
+      return `${action.asSwipe ? 'Flick' : 'Drag'} from (${Math.round(action.fromX)}, ${Math.round(action.fromY)}) to (${Math.round(action.toX)}, ${Math.round(action.toY)})`;
     case 'type_text':
       return showTypedText ? `Type "${action.text.slice(0, 80)}"` : `Type ${[...action.text].length} characters`;
     case 'press_key':

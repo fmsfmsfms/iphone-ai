@@ -341,7 +341,7 @@ describe('screen capture', () => {
     expect(c.device.canCaptureScreen()).toBe(true);
 
     const first = await c.device.captureFrame({ reason: 'test' });
-    expect(first.meta).toMatchObject({ seq: 1, widthPx: 820, heightPx: 1796, mimeType: 'image/png', pxPerPt: 2 });
+    expect(first.meta).toMatchObject({ seq: 1, widthPx: 820, heightPx: 1796, mimeType: 'image/png', pxPerPt: 2, source: 'mirroir-screenshot' });
     expect(first.meta.geometry?.geometryId).toBe(GEOMETRY);
     expect(pngDimensions(first.data)).toEqual({ width: 820, height: 1796 });
     expect(c.device.getLatestFrame()).toBe(first);
@@ -350,6 +350,10 @@ describe('screen capture', () => {
 
     const same = await c.device.captureFrame({ settleMs: 300 });
     expect(same.meta.seq).toBe(2);
+    // Live capture frames take numbers from the same sequence (a higher seq is always newer).
+    expect(c.device.nextFrameSeq()).toBe(3);
+    const after = await c.device.captureFrame();
+    expect(after.meta.seq).toBe(4);
     expect(same.data.equals(first.data)).toBe(true);
 
     await c.device.perform(TAP_SETTINGS, user());
@@ -405,6 +409,9 @@ describe('screen capture', () => {
     expect(battery.elements.map((e) => e.label)).toEqual(expect.arrayContaining(['Battery Percentage', '87%']));
     expect(battery.fingerprint).not.toBe(d.fingerprint);
     expect(c.calledTools().slice(-4)).toEqual(['status', 'screenshot', 'status', 'describe_screen']);
+    // The settle wait before an AI observation is capped at 700 ms (it was 1500 ms, which never
+    // settles on moving video and was added to every AI step).
+    expect(c.readMockCalls().filter((x) => x.name === 'screenshot').at(-1)?.args).toEqual({ settle_ms: 700 });
   });
 
   it('surfaces describe_screen failures as tool_failed', async () => {

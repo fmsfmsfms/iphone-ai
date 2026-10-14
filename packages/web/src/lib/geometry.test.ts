@@ -181,11 +181,10 @@ describe('helpers', () => {
     expect(fitAspect({ width: 0, height: 400 }, 0.5)).toEqual({ width: 0, height: 0 });
   });
 
-  it('classifyGesture distinguishes tap, swipe and drag', () => {
-    expect(classifyGesture(3, 2000)).toBe('tap');
-    expect(classifyGesture(8, 100)).toBe('tap');
-    expect(classifyGesture(40, 250)).toBe('swipe');
-    expect(classifyGesture(40, 600)).toBe('swipe');
-    expect(classifyGesture(40, 601)).toBe('drag');
+  it('classifyGesture distinguishes a tap from a drag by travel only', () => {
+    expect(classifyGesture(3)).toBe('tap');
+    expect(classifyGesture(8)).toBe('tap');
+    expect(classifyGesture(8.5)).toBe('drag');
+    expect(classifyGesture(40)).toBe('drag');
   });
 });

@@ -5,6 +5,11 @@ import type { AppSettings, SensitiveRule } from './settings.js';
 
 export const DEFAULT_MIRROIR_BINARY = '/opt/homebrew/bin/mirroir';
 
+/** Default frame rate of the ScreenCaptureKit live capture helper. */
+export const DEFAULT_LIVE_FPS = 30;
+export const MIN_LIVE_FPS = 5;
+export const MAX_LIVE_FPS = 60;
+
 export const DEFAULT_BLOCKED_APPS: readonly string[] = [
   // Apple
   'Wallet',
@@ -273,6 +278,8 @@ export function createDefaultSettings(): AppSettings {
         idleFps: 0.2,
         idleAfterMs: 30000,
         pauseWhenHidden: true,
+        liveCapture: true,
+        liveFps: DEFAULT_LIVE_FPS,
       },
     },
     ai: {
@@ -280,7 +287,7 @@ export function createDefaultSettings(): AppSettings {
       visionProviderId: null,
       maxActionsPerTask: 25,
       maxTaskDurationSec: 300,
-      settleDelayMs: 900,
+      settleDelayMs: 450,
       providers: DEFAULT_PROVIDERS.map((p) => ({ ...p })),
     },
     permissions: {

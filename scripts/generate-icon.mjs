@@ -1,6 +1,6 @@
 #!/usr/bin/env node
-// Regenerates the app icon: renders src-tauri/app-icon.png (1024×1024) with
-// scripts/generate-icon.swift, then runs `tauri icon` to produce
+// Regenerates the app icon: renders src-tauri/app-icon.png (1024×1024) from
+// assets/brand/logo.png with scripts/generate-icon.swift, then runs `tauri icon` to produce
 // src-tauri/icons/* (icns, pngs) and drops the mobile / Windows Store variants
 // this macOS-only app does not ship.
 //
@@ -13,6 +13,7 @@ import { fileURLToPath } from 'node:url';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const source = path.join(root, 'src-tauri', 'app-icon.png');
+const logo = path.join(root, 'assets', 'brand', 'logo.png');
 const iconsDir = path.join(root, 'src-tauri', 'icons');
 
 function run(command, args) {
@@ -30,7 +31,7 @@ if (!existsSync('/usr/bin/swift')) {
 }
 
 try {
-  run('/usr/bin/swift', [path.join(root, 'scripts', 'generate-icon.swift'), source]);
+  run('/usr/bin/swift', [path.join(root, 'scripts', 'generate-icon.swift'), logo, source]);
   run('pnpm', ['tauri', 'icon', source]);
 } catch (error) {
   console.error(`error: ${error instanceof Error ? error.message : String(error)}`);

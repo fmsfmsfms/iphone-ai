@@ -5,15 +5,17 @@
 //   2. backend         node packages/server/scripts/bundle.mjs       -> packages/server/dist/server.mjs
 //   3. resources       src-tauri/resources/{server,web,claude-code}  (recreated)
 //   4. Node runtime    official Node.js 22 from nodejs.org (SHA-256 + signature verified) -> src-tauri/binaries/node-<triple>
-//   5. Claude Code     Agent SDK native binary -> src-tauri/resources/claude-code/claude
-//   6. signing         APPLE_SIGNING_IDENTITY, else Developer ID / Apple Development, else ad-hoc
-//   7. bundle          pnpm tauri build --bundles app
-//   8. release         copy to release/iPhone AI.app, verify the signature, print a summary
+//   5. capture helper  src-tauri/capture/main.swift (swiftc, ScreenCaptureKit live view; scripts/build-capture.mjs)
+//                      -> src-tauri/binaries/iphone-ai-capture-<triple> (externalBin, ad-hoc signed until bundled)
+//   6. Claude Code     Agent SDK native binary -> src-tauri/resources/claude-code/claude
+//   7. signing         APPLE_SIGNING_IDENTITY, else Developer ID / Apple Development, else ad-hoc
+//   8. bundle          pnpm tauri build --bundles app (signs node + iphone-ai-capture with the app identity)
+//   9. release         copy to release/iPhone AI.app, verify the signatures and the bundled helpers, print a summary
 //
 // Options:
 //   --no-claude-code          leave out the ~240 MB Claude Code binary (the "Claude Code login"
 //                             provider is then unavailable)
-//   --stage-only              stop after step 5 (enough for `cargo check` / `cargo run` in src-tauri)
+//   --stage-only              stop after step 6 (enough for `cargo check` / `cargo run` in src-tauri)
 //   --debug                   build the debug profile (faster compile, larger app)
 //   --allow-unofficial-node   accept a node binary that is not signed by the Node.js Foundation
 //   --install                 also install the app to /Applications/iPhone AI.app (refused while it is running).
@@ -40,6 +42,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
+import { buildCapture, CAPTURE_NAME, smokeTest as captureSmokeTest } from './build-capture.mjs';
+
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const tauriDir = path.join(root, 'src-tauri');
 const resourcesDir = path.join(tauriDir, 'resources');
@@ -62,7 +66,7 @@ const green = paint('32');
 const yellow = paint('33');
 const cyan = paint('36');
 
-const TOTAL_STEPS = 8;
+const TOTAL_STEPS = 9;
 function step(n, title) {
   console.log(`\n${cyan(`▸ [${n}/${TOTAL_STEPS}]`)} ${bold(title)}`);
 }
@@ -162,6 +166,9 @@ function checkPrerequisites(options) {
     throw new BuildError('packages/server/src/main.ts is missing.');
   }
   if (!existsSync('/usr/bin/codesign')) throw new BuildError('codesign not found (install the Xcode Command Line Tools).');
+  if (!capture('/usr/bin/xcrun', ['--sdk', 'macosx', '--find', 'swiftc']).ok) {
+    throw new BuildError('swiftc not found — install the Xcode Command Line Tools (xcode-select --install); it builds the live-view helper.');
+  }
   if (!options.stageOnly && !capture('cargo', ['--version']).ok) {
     throw new BuildError('cargo not found — install Rust (https://rustup.rs) to build the app shell.');
   }
@@ -278,6 +285,22 @@ function sha256File(file) {
   return createHash('sha256').update(readFileSync(file)).digest('hex');
 }
 
+/** Step 5: the ScreenCaptureKit live-view helper, named for the Rust target `tauri build` uses. */
+function stageCaptureHelper() {
+  step(5, 'Building the ScreenCaptureKit live-view helper');
+  const archTriple = { arm64: 'aarch64-apple-darwin', x64: 'x86_64-apple-darwin' }[process.arch];
+  const rustTriple = rustHostTriple();
+  const target = rustTriple === 'aarch64-apple-darwin' || rustTriple === 'x86_64-apple-darwin' ? rustTriple : archTriple;
+  if (!target) throw new BuildError(`unsupported architecture ${process.arch}`);
+  try {
+    const result = buildCapture({ target, log: (line) => console.log(dim(line)) });
+    info(`${formatBytes(result.sizeBytes)} -> ${rel(result.path)}${result.built ? '' : ' (cached)'}`);
+    info('--help runs ✓ (the bundled copy is re-signed with the app identity by tauri build)');
+  } catch (error) {
+    throw new BuildError(`capture helper: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+
 function resolveClaudeCodeBinary() {
   const serverRequire = createRequire(path.join(serverDir, 'package.json'));
   try {
@@ -290,7 +313,7 @@ function resolveClaudeCodeBinary() {
 }
 
 function stageClaudeCode(options) {
-  step(5, 'Staging the Claude Code binary (Claude Agent SDK provider)');
+  step(6, 'Staging the Claude Code binary (Claude Agent SDK provider)');
   const dir = path.join(resourcesDir, 'claude-code');
   if (!options.claudeCode) {
     writeFileSync(
@@ -366,7 +389,7 @@ function adHocWarning(reason) {
 }
 
 function chooseIdentity() {
-  step(6, 'Choosing a signing identity');
+  step(7, 'Choosing a signing identity');
   let identity = process.env.APPLE_SIGNING_IDENTITY?.trim() ?? '';
   let source = 'APPLE_SIGNING_IDENTITY';
   if (!identity) {
@@ -402,7 +425,7 @@ function chooseIdentity() {
 const SIGNING_FAILURE = /failed to sign|codesign|errSec|signing identity|keychain/i;
 
 async function buildApp(identity, options) {
-  step(7, `Building ${APP_NAME} (${options.debug ? 'debug' : 'release'})`);
+  step(8, `Building ${APP_NAME} (${options.debug ? 'debug' : 'release'})`);
   const args = ['tauri', 'build', '--bundles', 'app', '--ci', ...(options.debug ? ['--debug'] : [])];
   const env = { ...process.env, APPLE_SIGNING_IDENTITY: identity };
   let result = await runTee('pnpm', args, env);
@@ -417,7 +440,7 @@ async function buildApp(identity, options) {
 }
 
 function release(identity, options) {
-  step(8, 'Copying to release/ and verifying');
+  step(9, 'Copying to release/ and verifying');
   const targetDir = process.env.CARGO_TARGET_DIR ? path.resolve(process.env.CARGO_TARGET_DIR) : path.join(tauriDir, 'target');
   const built = path.join(targetDir, options.debug ? 'debug' : 'release', 'bundle', 'macos', APP_NAME);
   if (!existsSync(built)) throw new BuildError(`expected bundle not found: ${built}`);
@@ -456,6 +479,14 @@ function release(identity, options) {
   } else {
     warn(`the bundled node did not run (${nodeCheck.status ?? nodeCheck.error?.message}); check Entitlements.plist (allow-jit).`);
   }
+  const helperCheck = verifyCaptureHelper(app);
+  if (helperCheck.ok) {
+    info(`live-view helper: signed by ${helperCheck.signature.authority} (hardened runtime), --help ✓, stdin closed -> ${helperCheck.outcome} ✓`);
+  } else {
+    console.error(red(`  live-view helper (Contents/MacOS/${CAPTURE_NAME}) FAILED verification:`));
+    for (const problem of helperCheck.problems) console.error(dim(`    - ${problem}`));
+    process.exitCode = 1;
+  }
   if (verify.ok) {
     info('codesign --verify --deep --strict: valid ✓');
   } else if (claudeOnly) {
@@ -478,6 +509,69 @@ function release(identity, options) {
     ]);
   }
   info(dim('Tip: move it to /Applications and always launch that copy, so privacy grants stay attached to one path.'));
+}
+
+function signatureOf(file) {
+  const out = capture('/usr/bin/codesign', ['-dvv', file]).output;
+  return {
+    authority: out.match(/^Authority=(.*)$/m)?.[1] ?? (out.includes('Signature=adhoc') ? 'ad-hoc' : 'unsigned'),
+    team: out.match(/^TeamIdentifier=(.*)$/m)?.[1] ?? 'not set',
+    runtime: /^CodeDirectory .*flags=0x[0-9a-f]+\([^)]*\bruntime\b/m.test(out),
+  };
+}
+
+/** STATUS events from the helper's framed stdout (`[u32 BE length][type][payload]`). */
+function captureStatusEvents(stdout) {
+  const events = [];
+  let offset = 0;
+  while (offset + 5 <= stdout.length) {
+    const length = stdout.readUInt32BE(offset);
+    if (length < 1 || offset + 4 + length > stdout.length) return { events, valid: false };
+    if (stdout[offset + 4] === 0x01) {
+      try {
+        events.push(JSON.parse(stdout.subarray(offset + 5, offset + 4 + length).toString('utf8')));
+      } catch {
+        return { events, valid: false };
+      }
+    }
+    offset += 4 + length;
+  }
+  return { events, valid: offset === stdout.length };
+}
+
+/**
+ * The bundled live-view helper: present, signed like the app (hardened runtime), `--help`
+ * works and, started with stdin already closed, it exits cleanly with valid framing:
+ * 0 + "stopped", or 2 + "permission" when whatever runs this build lacks Screen Recording.
+ */
+function verifyCaptureHelper(app) {
+  const helper = path.join(app, 'Contents', 'MacOS', CAPTURE_NAME);
+  if (!existsSync(helper)) return { ok: false, problems: [`Contents/MacOS/${CAPTURE_NAME} is missing`] };
+  const problems = [];
+  const appSignature = signatureOf(app);
+  const helperSignature = signatureOf(helper);
+  if (helperSignature.authority !== appSignature.authority || helperSignature.team !== appSignature.team) {
+    problems.push(
+      `signed by "${helperSignature.authority}" (team ${helperSignature.team}), the app by "${appSignature.authority}" (team ${appSignature.team})`,
+    );
+  }
+  if (!helperSignature.runtime) problems.push('not signed with the hardened runtime');
+  const strict = capture('/usr/bin/codesign', ['--verify', '--strict', helper]);
+  if (!strict.ok) problems.push(`codesign --verify failed: ${strict.output.trim()}`);
+  const smoke = captureSmokeTest(helper);
+  if (!smoke.ok) problems.push(`--help failed: ${smoke.detail}`);
+
+  const run = spawnSync(helper, [], { input: '', timeout: 15_000 });
+  const { events, valid } = captureStatusEvents(run.stdout ?? Buffer.alloc(0));
+  const last = events.at(-1);
+  let outcome = `exit ${run.status ?? run.signal ?? run.error?.message}`;
+  if (run.error) problems.push(`did not run with stdin closed: ${run.error.message}`);
+  else if (!valid) problems.push('wrote malformed framed output with stdin closed');
+  else if (run.status === 0 && last?.event === 'stopped') outcome = 'exit 0, "stopped"';
+  else if (run.status === 2 && last?.event === 'error' && last.code === 'permission') {
+    outcome = 'exit 2, "permission" (Screen Recording is not granted to whatever runs this build; expected)';
+  } else problems.push(`unexpected result with stdin closed: ${outcome}, last status ${JSON.stringify(last ?? null)}`);
+  return { ok: problems.length === 0, problems, signature: helperSignature, outcome };
 }
 
 /** Copies release/iPhone AI.app to /Applications (the only supported launch location). */
@@ -506,6 +600,7 @@ async function main() {
   bundleServer();
   stageResources();
   await stageNode(options);
+  stageCaptureHelper();
   stageClaudeCode(options);
   if (options.stageOnly) {
     console.log(`\n${green('✓')} staged. You can now run \`cargo check\` or \`cargo run\` in src-tauri.`);
@@ -517,7 +612,7 @@ async function main() {
 }
 
 // Exported for scripted checks; running the file performs the build.
-export { listIdentities, parseOptions, resolveClaudeCodeBinary, stageClaudeCode, stageNode };
+export { listIdentities, parseOptions, resolveClaudeCodeBinary, stageCaptureHelper, stageClaudeCode, stageNode, verifyCaptureHelper };
 
 if (process.argv[1] && import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href) {
   main().catch((error) => {
