@@ -4,7 +4,7 @@ Monitor and control your **physical iPhone** from your Mac — by hand, with AI 
 (Claude, OpenAI, or your own local models), or with reusable automations — through
 Apple's **iPhone Mirroring** and your installed **[Mirroir MCP](https://mirroir.dev/)** server.
 
-- **Live Control** — see the phone screen live (ScreenCaptureKit, up to 30 fps, with
+- **Live Control** — see the phone screen live (ScreenCaptureKit, 10–15 fps, with
   honest FPS/latency; polled screenshots as fallback), tap, flick, long-press, type and
   navigate from a phone-shaped viewer.
 - **AI Assistant** — "Open Settings", "Check my battery percentage", "Navigate to Wi-Fi
@@ -38,13 +38,13 @@ iPhone AI.app (Tauri) ─► Node backend ─► Mirroir MCP (stdio) ─► iPho
 
 ```bash
 pnpm install
-pnpm package:mac -- --install   # builds release/iPhone AI.app and installs /Applications/iPhone AI.app
+pnpm package:mac -- --install   # builds, signs and installs /Applications/iPhone AI.app
 open "/Applications/iPhone AI.app"
 ```
 
 Always launch the copy in **/Applications**: macOS blocks an app inside `~/Documents`,
 `~/Desktop` or `~/Downloads` from reading its own bundled server until a privacy prompt is
-answered, and the app tells you to move it if you try.
+answered; a copy started there opens the installed one instead (or asks you to install it).
 
 Then follow **Dashboard → Setup checklist**. Full instructions: [docs/SETUP.md](docs/SETUP.md).
 

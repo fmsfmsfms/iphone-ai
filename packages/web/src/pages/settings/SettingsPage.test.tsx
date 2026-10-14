@@ -35,6 +35,13 @@ function routes(input: RequestInfo | URL, init?: RequestInit): Response {
       checks: [
         { name: 'Mirroir binary', status: 'ok', detail: 'Found /opt/homebrew/bin/mirroir' },
         { name: 'Accessibility', status: 'fail', detail: 'Not granted', fix_hint: 'Open System Settings › Privacy & Security › Accessibility' },
+        // Mirroir 0.40.1's real hint while paused (iPhone Mirroring needs the iPhone locked).
+        {
+          name: 'Mirroring connected',
+          status: 'failed',
+          detail: 'paused',
+          fix_hint: 'iPhone Mirroring is paused. Unlock your iPhone and click Resume in the mirroring window.',
+        },
       ],
     });
   if (url === '/api/providers/claude-code/status')
@@ -133,7 +140,10 @@ describe('SettingsPage', () => {
     render(<SettingsPage section="connection" />);
     expect(await screen.findByText('Accessibility', { selector: 'p' })).toBeInTheDocument();
     expect(screen.getByText(/Privacy & Security › Accessibility/)).toBeInTheDocument();
-    expect(screen.getByText('1 check needs attention')).toBeInTheDocument();
+    expect(screen.getByText('2 checks need attention')).toBeInTheDocument();
+    // Mirroir's "Unlock your iPhone" hint for a paused session is replaced with the correct guidance.
+    expect(screen.getByText(/Lock your iPhone and keep it nearby, then click Resume/)).toBeInTheDocument();
+    expect(screen.queryByText(/Unlock your iPhone/)).toBeNull();
   });
 
   it('asks for confirmation before allowing remote control', async () => {

@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Embedded into the iphone-ai-capture binary at link time (__TEXT,__info_plist; see
+  scripts/build-capture.mjs). It makes the helper a background-only process for LaunchServices:
+  when NSApplication checks the process in (main.swift creates it at startup; ScreenCaptureKit
+  would otherwise create it lazily), it registers as type BackgroundOnly with this identifier,
+  never as a second Dock app named "iPhone AI".
+
+  CoreFoundation uses this embedded plist only while the executable's name does NOT end with the
+  enclosing app's CFBundleExecutable ("iphone-ai"). Inside iPhone AI.app/Contents/MacOS the helper
+  is "iphone-ai-capture", so this plist applies; a name such as "capture-iphone-ai" would make
+  Bundle.main the app (a regular Foreground app) and the helper would show in the Dock again.
+  main.swift warns on stderr when LSBackgroundOnly is not in effect.
+
+  Screen Recording (TCC) is unaffected: it is attributed to the responsible process (iPhone AI).
+-->
+<plist version="1.0">
+<dict>
+  <key>CFBundleIdentifier</key>
+  <string>me.alsaud.iphoneai.capture</string>
+  <key>CFBundleName</key>
+  <string>iPhone AI Capture</string>
+  <key>CFBundleInfoDictionaryVersion</key>
+  <string>6.0</string>
+  <key>LSBackgroundOnly</key>
+  <true/>
+</dict>
+</plist>

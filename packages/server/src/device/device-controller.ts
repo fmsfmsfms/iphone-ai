@@ -24,6 +24,7 @@ import { EventEmitter } from 'node:events';
 import {
   ACTION_TOOL,
   type ActionResult,
+  type ActivitySeverity,
   type Actor,
   type ControlOwner,
   type DeviceAction,
@@ -150,6 +151,8 @@ export class DeviceController extends EventEmitter {
   private stopLatched = false;
   private stopReason: string | null = null;
   private lastFocusSteal: number | null = null;
+  /** When Mirroir last pressed Resume for a user capture (start and end of that call). */
+  private userResumeAt: number | null = null;
   private mirroring: MirroringInfo = { state: 'unknown', rawStatus: '', target: 'iphone', geometry: null, checkedAt: null };
   private permissions: MacPermissions = { screenRecording: 'unknown', accessibility: 'unknown', source: 'none', checkedAt: null };
   private latestFrame: Frame | null = null;
@@ -180,7 +183,9 @@ export class DeviceController extends EventEmitter {
     this.log = log.child('device');
     this.mirroir.on('state', () => this.publishStatus());
     this.mirroir.on('exit', () => {
+      const from = this.mirroring.state;
       this.mirroring = { ...this.mirroring, state: 'unknown', checkedAt: Date.now() };
+      if (from !== 'unknown') this.log.info('Mirroring state changed', { from, to: 'unknown', reason: 'Mirroir exited' });
       this.publishStatus();
     });
   }
@@ -238,6 +243,11 @@ export class DeviceController extends EventEmitter {
 
   get geometry(): WindowGeometry | null {
     return this.mirroring.geometry;
+  }
+
+  /** When a user-allowed capture last made Mirroir press Resume (live capture's conflict probe). */
+  get lastUserResumeAt(): number | null {
+    return this.userResumeAt;
   }
 
   get isStopLatched(): boolean {
@@ -320,9 +330,10 @@ export class DeviceController extends EventEmitter {
   }
 
   private onMirroringTransition(from: MirroringInfo['state'], to: MirroringInfo['state']): void {
+    this.log.info('Mirroring state changed', { from, to });
     const summaries: Record<MirroringInfo['state'], string> = {
       connected: 'iPhone Mirroring is connected.',
-      paused: 'iPhone Mirroring is paused — unlock the iPhone or click Resume.',
+      paused: 'iPhone Mirroring is paused — lock the iPhone, keep it nearby and click Resume.',
       not_running: 'iPhone Mirroring is not running.',
       no_window: 'iPhone Mirroring is running but no window was found (check Accessibility permission).',
       error: 'iPhone Mirroring status could not be read.',
@@ -339,6 +350,11 @@ export class DeviceController extends EventEmitter {
     if (to === 'connected' && this.permissions.screenRecording !== 'granted') {
       void this.refreshPermissions().catch(() => undefined);
     }
+  }
+
+  /** Records a connection activity row for live capture (the capture-conflict latch), which has no activity log of its own. */
+  recordConnectionActivity(entry: { type: string; severity: ActivitySeverity; summary: string; detail?: Record<string, unknown> }): void {
+    this.activity.record({ category: 'connection', actor: 'system', ...entry });
   }
 
   /** Runs `mirroir doctor --json` for Screen Recording / Accessibility (no TCC prompt, no focus change). */
@@ -575,7 +591,7 @@ export class DeviceController extends EventEmitter {
       if (info.state !== 'connected') {
         throw new DeviceError(
           info.state === 'paused'
-            ? 'iPhone Mirroring is paused. Unlock the iPhone or click Resume, then try again.'
+            ? 'iPhone Mirroring is paused. Lock your iPhone and keep it nearby, then click Resume and try again.'
             : `iPhone Mirroring is not connected (${info.rawStatus || info.state}).`,
           info.state === 'paused' ? 'paused' : 'not_connected',
         );
@@ -731,7 +747,9 @@ export class DeviceController extends EventEmitter {
       await this.assertCaptureAllowedLive(options.allowResume === true);
       const settle = Math.max(0, Math.min(options.settleMs ?? 0, 5000));
       const started = Date.now();
-      const out = await this.mirroir.call('screenshot', { settle_ms: settle }, { timeoutMs: this.readTimeout(20000 + settle) });
+      const out = await this.resumable(options.allowResume === true, () =>
+        this.mirroir.call('screenshot', { settle_ms: settle }, { timeoutMs: this.readTimeout(20000 + settle) }),
+      );
       if (!out.ok || out.images.length === 0) {
         throw new DeviceError(out.text || 'Screenshot failed.', 'tool_failed', 502);
       }
@@ -762,6 +780,21 @@ export class DeviceController extends EventEmitter {
   }
 
   /**
+   * Runs a capture call. While Mirroring is paused and the user allowed it,
+   * Mirroir presses Resume first: the time is noted so live capture's conflict
+   * probe does not mistake the user's Resume for capture clearing a false pause.
+   */
+  private async resumable<T>(allowResume: boolean, call: () => Promise<T>): Promise<T> {
+    if (!allowResume || this.mirroring.state !== 'paused') return call();
+    this.userResumeAt = Date.now();
+    try {
+      return await call();
+    } finally {
+      this.userResumeAt = Date.now();
+    }
+  }
+
+  /**
    * Timeout for read-only calls (screenshots, OCR, health, diagnostics): the
    * built-in limit, raised to the user's "Request timeout" setting when that
    * is longer. Input tools keep their short fixed limits (a wedged input call
@@ -782,7 +815,7 @@ export class DeviceController extends EventEmitter {
     }
     const state = this.mirroring.state;
     if (state === 'paused' && !allowResume) {
-      throw new DeviceError('iPhone Mirroring is paused. Unlock the iPhone or click Resume.', 'paused');
+      throw new DeviceError('iPhone Mirroring is paused. Lock your iPhone and keep it nearby, then click Resume.', 'paused');
     }
     if (state !== 'connected' && state !== 'paused') {
       throw new DeviceError('iPhone Mirroring is not connected.', 'not_connected');
@@ -826,15 +859,19 @@ export class DeviceController extends EventEmitter {
       const allowResume = options.allowResume === true;
       if (options.settleFirst) {
         await this.assertCaptureAllowedLive(allowResume);
-        const settled = await this.mirroir.call('screenshot', { settle_ms: DESCRIBE_SETTLE_MS }, { timeoutMs: this.readTimeout(25000) });
+        const settled = await this.resumable(allowResume, () =>
+          this.mirroir.call('screenshot', { settle_ms: DESCRIBE_SETTLE_MS }, { timeoutMs: this.readTimeout(25000) }),
+        );
         if (settled.ok && settled.images[0]) this.storeFrame(settled.images[0].data, settled.images[0].mimeType, settled.durationMs);
       }
       // Re-read after the settle wait too: Mirroring may have paused meanwhile.
       await this.assertCaptureAllowedLive(allowResume);
-      const out = await this.mirroir.call(
-        'describe_screen',
-        { omit_screenshot: options.includeImage === false },
-        { timeoutMs: this.readTimeout(this.describeWarm ? 30000 : 90000) },
+      const out = await this.resumable(allowResume, () =>
+        this.mirroir.call(
+          'describe_screen',
+          { omit_screenshot: options.includeImage === false },
+          { timeoutMs: this.readTimeout(this.describeWarm ? 30000 : 90000) },
+        ),
       );
       if (!out.ok) throw new DeviceError(out.text || 'describe_screen failed.', 'tool_failed', 502);
       this.describeWarm = true;

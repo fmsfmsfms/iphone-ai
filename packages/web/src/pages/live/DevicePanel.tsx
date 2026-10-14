@@ -24,7 +24,7 @@ import { Section } from '../../components/Panel';
 import { PermissionBanner } from '../../components/PermissionBanner';
 import { sendManualAction } from '../../components/phone/phone-actions';
 import { StatusChip } from '../../components/StatusChip';
-import { manualInputAvailability, mcpChip, mirroringChip, missingPermissions } from '../../lib/device-state';
+import { liveErrorText, manualInputAvailability, mcpChip, mirroringChip, missingPermissions } from '../../lib/device-state';
 import { useI18n } from '../../lib/i18n';
 import { useLiveScreen } from '../../lib/live-screen';
 import { useActiveRun, useActiveTask, useAppStore } from '../../state/store';
@@ -195,7 +195,7 @@ export function DevicePanel({ manual, typeFieldRef }: DevicePanelProps) {
             {
               label: t('live.device.liveView'),
               value: live.flowing ? <span className="text-success">{liveValue}</span> : liveValue,
-              hint: !live.flowing && liveCaptureOn && stream?.liveError ? stream.liveError : undefined,
+              hint: !live.flowing && liveCaptureOn && stream?.liveError ? liveErrorText(stream.liveError, t) : undefined,
             },
             { label: t('live.device.targetFps'), value: stream ? fps(stream.targetFps) : '—' },
             {

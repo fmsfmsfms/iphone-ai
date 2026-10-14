@@ -10,14 +10,14 @@ Three kinds of evidence are kept strictly apart:
 
 ## Automated suites
 
-Last full run: 2026-10-14, v0.2.0, with the official Node 22 toolchain (`source scripts/env.sh`).
+Last full run: 2026-10-15, v0.3.0, with the official Node 22 toolchain (`source scripts/env.sh`).
 
 | Suite | Command | Result |
 |---|---|---|
-| Backend unit + integration (MOCK) | `pnpm --filter @iphone-ai/server test` | 484 passed (37 files) |
-| UI unit (jsdom) | `pnpm --filter @iphone-ai/web test` | 294 passed (32 files) |
+| Backend unit + integration (MOCK) | `pnpm --filter @iphone-ai/server test` | 496 passed (38 files, incl. the real capture helper's --test-pattern against the backend parser) |
+| UI unit (jsdom) | `pnpm --filter @iphone-ai/web test` | 304 passed (33 files) |
 | Browser E2E (Playwright, MOCK backend + scripted model) | `pnpm test:e2e` | 19 passed |
-| Tauri shell (Rust) | `cd src-tauri && cargo test` | 15 passed; clippy clean |
+| Tauri shell (Rust) | `cd src-tauri && cargo test` | 21 passed; clippy and rustfmt clean |
 | Real-device read-only | `pnpm test:device` (needs a connected iPhone) | not run; see device section |
 
 Backend suites cover: Mirroir text parsers (all output variants), the project-local
@@ -58,12 +58,25 @@ afterwards from the app's activity log:
   trackpad scroll with a momentum tail. The user found the viewer (≈2 fps polling) laggy
   and feed swiping slow.
 
-**v0.2.0 changes made in response, not yet verified on the real iPhone:**
+**v0.2.0 on the real iPhone (installed app, 2026-10-14), read from the backend log, the
+activity log and macOS's unified log:**
 
-- ScreenCaptureKit live view (`iphone-ai-capture`). Verified only in packaging: the helper
-  is signed into the bundle with the hardened runtime, answers `--help`, and reports a clean
-  `permission` status when run without a Screen Recording grant. Real capture of the
-  Mirroring window needs Screen Recording granted to the installed app.
-- AI, workflow and viewer swipes are finger flicks (Mirroir `drag`, 160–240 ms) instead of
-  scroll swipes; after-action settle shortened (450 ms default). Tested against the mock
-  Mirroir only.
+- The SCStream live view captured the real Mirroring window at **29.4 fps** (882 frames in
+  30 s, 3 ms average JPEG encode, 0 dropped), with geometry matching Mirroir's.
+- Defect: each stream start made iPhone Mirroring add a "window streaming" overlay that
+  Mirroir 0.40.1 reports as **Paused** while the session was live, blocking control.
+  Fixed in v0.3.0 by capturing screenshots instead of a stream.
+- Defect: the helper appeared as a second "iPhone AI" in the Dock; quitting that icon
+  stopped the live view. Fixed in v0.3.0 (background-only helper).
+- Defect: after installing, Spotlight launched a build copy from `~/Documents`, which
+  refused to start. Fixed in v0.3.0 (build copies deleted; stray copies hand off).
+- Two genuine pauses came from the iPhone being unlocked during the session; the app's old
+  "Unlock your iPhone" advice was wrong and is corrected in v0.3.0.
+
+**Not yet verified on the real iPhone:**
+
+- Finger-flick swipes (Mirroir `drag`, 160–240 ms) for the AI, workflows and the viewer,
+  and the shorter after-action settle (450 ms). Mock Mirroir only; no AI or manual swipe ran
+  after v0.2.0 was installed.
+- Everything new in v0.3.0: screenshot-based live capture, the background-only helper, the
+  conflict safety net, the corrected pause guidance and the launch hand-off.

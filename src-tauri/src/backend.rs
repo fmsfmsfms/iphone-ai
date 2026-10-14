@@ -32,6 +32,8 @@ const POLL_INTERVAL: Duration = Duration::from_millis(200);
 const CHILD_PATH: &str = "/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:/usr/local/bin";
 /// Must match the backend's default (packages/server/src/core/paths.ts).
 const DATA_DIR_NAME: &str = "iPhone AI";
+/// Relative to the data folder.
+const LOG_FILE: &str = "logs/backend.log";
 const RECENT_LINES: usize = 60;
 const MAX_LINE_BYTES: u64 = 64 * 1024;
 
@@ -60,7 +62,7 @@ impl ShellPaths {
         let resource_dir = app.path().resource_dir().unwrap_or_else(|_| exe_dir.join("../Resources"));
         let data_dir = app.path().data_dir().map(|dir| dir.join(DATA_DIR_NAME)).unwrap_or_else(|_| {
             let home = system::passwd_entry().map(|(_, home)| home).unwrap_or_else(|| PathBuf::from("/tmp"));
-            home.join("Library/Application Support").join(DATA_DIR_NAME)
+            default_data_dir(&home)
         });
         Self {
             node: exe_dir.join("node"),
@@ -68,10 +70,20 @@ impl ShellPaths {
             server_script: resource_dir.join("server/server.mjs"),
             web_dir: resource_dir.join("web"),
             claude_code: resource_dir.join("claude-code/claude"),
-            log_file: data_dir.join("logs/backend.log"),
+            log_file: data_dir.join(LOG_FILE),
             data_dir,
         }
     }
+}
+
+/// `~/Library/Application Support/iPhone AI` (what Tauri's data dir resolves to on macOS).
+fn default_data_dir(home: &Path) -> PathBuf {
+    home.join("Library/Application Support").join(DATA_DIR_NAME)
+}
+
+/// The backend log file, for logging before Tauri has started (see handoff.rs).
+pub(crate) fn default_log_file(home: &Path) -> PathBuf {
+    default_data_dir(home).join(LOG_FILE)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -532,7 +544,7 @@ fn read_lines(stream: impl Read, mut on_line: impl FnMut(&str)) {
 
 /// Folders macOS protects with a per-app privacy prompt ("Files and Folders").
 /// A bundled helper reading its own files there blocks until someone answers.
-fn protected_folder(executable: &Path, home: &Path) -> Option<&'static str> {
+pub(crate) fn protected_folder(executable: &Path, home: &Path) -> Option<&'static str> {
     const FOLDERS: [(&str, &str); 4] = [
         ("Documents", "Documents"),
         ("Desktop", "Desktop"),
@@ -659,6 +671,14 @@ mod tests {
         assert_eq!(protected_folder(Path::new("/Applications/iPhone AI.app/Contents/MacOS/node"), home), None);
         assert_eq!(protected_folder(Path::new("/Users/me/Applications/iPhone AI.app/Contents/MacOS/node"), home), None);
         assert_eq!(protected_folder(Path::new("/Users/me/DocumentsArchive/x/node"), home), None);
+    }
+
+    #[test]
+    fn default_log_file_is_in_application_support() {
+        assert_eq!(
+            default_log_file(Path::new("/Users/me")),
+            PathBuf::from("/Users/me/Library/Application Support/iPhone AI/logs/backend.log")
+        );
     }
 
     #[test]

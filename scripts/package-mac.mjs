@@ -10,7 +10,14 @@
 //   6. Claude Code     Agent SDK native binary -> src-tauri/resources/claude-code/claude
 //   7. signing         APPLE_SIGNING_IDENTITY, else Developer ID / Apple Development, else ad-hoc
 //   8. bundle          pnpm tauri build --bundles app (signs node + iphone-ai-capture with the app identity)
-//   9. release         copy to release/iPhone AI.app, verify the signatures and the bundled helpers, print a summary
+//   9. release         copy to release/iPhone AI.app, remove the intermediate src-tauri/target/*/bundle/macos copies,
+//                      verify the signatures and the bundled helpers (the live-view helper must check in with
+//                      LaunchServices as BackgroundOnly), print a summary
+//
+// Spotlight indexes app bundles inside ~/Documents and registers them with LaunchServices within
+// seconds, so every copy left in the repo is offered as "iPhone AI" in Spotlight and the Dock's app
+// list — and none of them can start there (the shell refuses protected folders). The build removes
+// the intermediate copies and unregisters them; with --install it also removes release/iPhone AI.app.
 //
 // Options:
 //   --no-claude-code          leave out the ~240 MB Claude Code binary (the "Claude Code login"
@@ -18,9 +25,10 @@
 //   --stage-only              stop after step 6 (enough for `cargo check` / `cargo run` in src-tauri)
 //   --debug                   build the debug profile (faster compile, larger app)
 //   --allow-unofficial-node   accept a node binary that is not signed by the Node.js Foundation
-//   --install                 also install the app to /Applications/iPhone AI.app (refused while it is running).
-//                             Launch it from there: macOS blocks apps inside ~/Documents, ~/Desktop or ~/Downloads
-//                             from reading their own bundled server until a privacy prompt is answered.
+//   --install                 also install the app to /Applications/iPhone AI.app (refused while it is running or
+//                             when the build failed verification), then remove release/iPhone AI.app. Launch it
+//                             from there: macOS blocks apps inside ~/Documents, ~/Desktop or ~/Downloads from
+//                             reading their own bundled server until a privacy prompt is answered.
 
 import { spawn, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
@@ -54,6 +62,10 @@ const APP_NAME = 'iPhone AI.app';
 const BUNDLE_ID = 'me.alsaud.iphoneai';
 const EXPECTED_NODE = 'v22.22.3';
 const NODE_AUTHORITY = 'Authority=Developer ID Application: Node.js Foundation';
+const LSREGISTER =
+  '/System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/LaunchServices.framework/Versions/A/Support/lsregister';
+/** What the live-view helper prints on stderr when its embedded Info.plist is not in effect (capture/main.swift). */
+const BACKGROUND_ONLY_WARNING = 'the embedded Info.plist is not in effect';
 const CLAUDE_PACKAGE = `@anthropic-ai/claude-agent-sdk-${process.platform}-${process.arch}`;
 
 // ── output helpers ──────────────────────────────────────────────────────────
@@ -439,7 +451,8 @@ async function buildApp(identity, options) {
   return identity;
 }
 
-function release(identity, options) {
+/** Returns whether the build passed verification (only a verified build may be installed). */
+async function release(identity, options) {
   step(9, 'Copying to release/ and verifying');
   const targetDir = process.env.CARGO_TARGET_DIR ? path.resolve(process.env.CARGO_TARGET_DIR) : path.join(tauriDir, 'target');
   const built = path.join(targetDir, options.debug ? 'debug' : 'release', 'bundle', 'macos', APP_NAME);
@@ -448,6 +461,12 @@ function release(identity, options) {
   const app = path.join(releaseDir, APP_NAME);
   rmSync(app, { recursive: true, force: true });
   run('/usr/bin/ditto', [built, app]); // preserves signatures, symlinks and xattrs
+  for (const dir of new Set([targetDir, path.join(tauriDir, 'target')])) {
+    for (const profile of ['release', 'debug']) {
+      const copy = path.join(dir, profile, 'bundle', 'macos', APP_NAME);
+      if (discardBuildCopy(copy)) info(dim(`removed the intermediate ${rel(copy)} (Spotlight would offer it as an app)`));
+    }
+  }
 
   const verify = capture('/usr/bin/codesign', ['--verify', '--deep', '--strict', '--verbose=2', app]);
   const claudeOnly = !verify.ok && /claude-code/.test(verify.output) && !/MacOS\/(node|iphone-ai)/.test(verify.output);
@@ -479,9 +498,14 @@ function release(identity, options) {
   } else {
     warn(`the bundled node did not run (${nodeCheck.status ?? nodeCheck.error?.message}); check Entitlements.plist (allow-jit).`);
   }
-  const helperCheck = verifyCaptureHelper(app);
+  const helperCheck = await verifyCaptureHelper(app);
   if (helperCheck.ok) {
-    info(`live-view helper: signed by ${helperCheck.signature.authority} (hardened runtime), --help ✓, stdin closed -> ${helperCheck.outcome} ✓`);
+    info(
+      `live-view helper: signed by ${helperCheck.signature.authority} (hardened runtime), --help ✓, ` +
+        `embedded Info.plist LSBackgroundOnly ✓, stdin closed -> ${helperCheck.outcome} ✓` +
+        (helperCheck.backgroundOnly.skipped ? '' : `, checks in as type="${helperCheck.backgroundOnly.type}" ✓`),
+    );
+    if (helperCheck.backgroundOnly.skipped) warn('live-view helper LaunchServices check skipped: no GUI session');
   } else {
     console.error(red(`  live-view helper (Contents/MacOS/${CAPTURE_NAME}) FAILED verification:`));
     for (const problem of helperCheck.problems) console.error(dim(`    - ${problem}`));
@@ -508,7 +532,10 @@ function release(identity, options) {
       `  tccutil reset AppleEvents ${BUNDLE_ID}`,
     ]);
   }
-  info(dim('Tip: move it to /Applications and always launch that copy, so privacy grants stay attached to one path.'));
+  if (!options.install) {
+    info(dim('Tip: move it to /Applications and always launch that copy, so privacy grants stay attached to one path.'));
+  }
+  return helperCheck.ok && (verify.ok || claudeOnly);
 }
 
 function signatureOf(file) {
@@ -541,12 +568,16 @@ function captureStatusEvents(stdout) {
 
 /**
  * The bundled live-view helper: present, signed like the app (hardened runtime), `--help`
- * works and, started with stdin already closed, it exits cleanly with valid framing:
- * 0 + "stopped", or 2 + "permission" when whatever runs this build lacks Screen Recording.
+ * works, its embedded Info.plist declares LSBackgroundOnly and, started with stdin already
+ * closed, it exits cleanly with valid framing: 0 + "stopped", or 2 + "permission" when
+ * whatever runs this build lacks Screen Recording. In a GUI session it must also check in
+ * with LaunchServices as BackgroundOnly (backgroundOnlyCheck).
  */
-function verifyCaptureHelper(app) {
+async function verifyCaptureHelper(app) {
   const helper = path.join(app, 'Contents', 'MacOS', CAPTURE_NAME);
-  if (!existsSync(helper)) return { ok: false, problems: [`Contents/MacOS/${CAPTURE_NAME} is missing`] };
+  if (!existsSync(helper)) {
+    return { ok: false, problems: [`Contents/MacOS/${CAPTURE_NAME} is missing`], backgroundOnly: { skipped: true } };
+  }
   const problems = [];
   const appSignature = signatureOf(app);
   const helperSignature = signatureOf(helper);
@@ -558,8 +589,8 @@ function verifyCaptureHelper(app) {
   if (!helperSignature.runtime) problems.push('not signed with the hardened runtime');
   const strict = capture('/usr/bin/codesign', ['--verify', '--strict', helper]);
   if (!strict.ok) problems.push(`codesign --verify failed: ${strict.output.trim()}`);
-  const smoke = captureSmokeTest(helper);
-  if (!smoke.ok) problems.push(`--help failed: ${smoke.detail}`);
+  const smoke = captureSmokeTest(helper); // --help and the embedded Info.plist (LSBackgroundOnly)
+  if (!smoke.ok) problems.push(smoke.detail);
 
   const run = spawnSync(helper, [], { input: '', timeout: 15_000 });
   const { events, valid } = captureStatusEvents(run.stdout ?? Buffer.alloc(0));
@@ -571,7 +602,93 @@ function verifyCaptureHelper(app) {
   else if (run.status === 2 && last?.event === 'error' && last.code === 'permission') {
     outcome = 'exit 2, "permission" (Screen Recording is not granted to whatever runs this build; expected)';
   } else problems.push(`unexpected result with stdin closed: ${outcome}, last status ${JSON.stringify(last ?? null)}`);
-  return { ok: problems.length === 0, problems, signature: helperSignature, outcome };
+  const backgroundOnly = await backgroundOnlyCheck(helper);
+  problems.push(...backgroundOnly.problems);
+  return { ok: problems.length === 0, problems, signature: helperSignature, outcome, backgroundOnly };
+}
+
+/**
+ * Runs the helper with the test pattern (no ScreenCaptureKit, no permission needed) and asks
+ * LaunchServices how it checked in: it must be BackgroundOnly. Without its embedded Info.plist
+ * it checked in with the app's Info.plist as a second Foreground "iPhone AI" with its own Dock
+ * icon. Needs a GUI (Aqua) session; elsewhere it is skipped.
+ */
+async function backgroundOnlyCheck(helper) {
+  if (capture('/bin/launchctl', ['managername']).output.trim() !== 'Aqua') return { skipped: true, problems: [] };
+  const problems = [];
+  const child = spawn(helper, ['--test-pattern', '--fps', '1'], { stdio: ['pipe', 'pipe', 'pipe'] });
+  let stderr = '';
+  child.stderr.setEncoding('utf8');
+  child.stderr.on('data', (text) => {
+    stderr += text;
+  });
+  child.stdin.on('error', () => undefined);
+  const closed = new Promise((resolve) => {
+    child.on('error', (error) => resolve({ error }));
+    child.on('close', (code, signal) => resolve({ code, signal }));
+  });
+  // Waits for the "started" STATUS while draining stdout (frames keep coming at 1 fps).
+  const started = await new Promise((resolve) => {
+    const timer = setTimeout(() => resolve(false), 10_000);
+    const settle = (value) => {
+      clearTimeout(timer);
+      resolve(value);
+    };
+    closed.then(() => settle(false));
+    let pending = Buffer.alloc(0);
+    child.stdout.on('data', (chunk) => {
+      pending = Buffer.concat([pending, chunk]);
+      while (pending.length >= 5 && pending.length >= 4 + pending.readUInt32BE(0)) {
+        const length = pending.readUInt32BE(0);
+        if (pending[4] === 0x01) {
+          try {
+            if (JSON.parse(pending.subarray(5, 4 + length).toString('utf8')).event === 'started') settle(true);
+          } catch {
+            // not a STATUS this check cares about
+          }
+        }
+        pending = pending.subarray(4 + Math.max(1, length));
+      }
+    });
+  });
+  let type = null;
+  if (!started) {
+    problems.push('the test pattern did not report "started" within 10 s, so its LaunchServices check-in was not checked');
+  } else {
+    type = /\btype="([^"]*)"/.exec(capture('/usr/bin/lsappinfo', ['info', String(child.pid)]).output)?.[1] ?? null;
+    if (!type) problems.push('it never checked in with LaunchServices (lsappinfo shows no type; expected BackgroundOnly)');
+    else if (type !== 'BackgroundOnly') {
+      problems.push(`it checked in with LaunchServices as type="${type}", not BackgroundOnly: it would show in the Dock`);
+    }
+  }
+  child.stdin.end();
+  const kill = setTimeout(() => child.kill('SIGKILL'), 8_000);
+  const result = await closed;
+  clearTimeout(kill);
+  if (result.error) problems.push(`the test pattern did not run: ${result.error.message}`);
+  else if (result.code !== 0) {
+    problems.push(`the test pattern did not exit cleanly after stdin closed (${result.signal ?? `exit ${result.code}`})`);
+  }
+  if (stderr.includes(BACKGROUND_ONLY_WARNING)) problems.push(`it warned on stderr that ${BACKGROUND_ONLY_WARNING}`);
+  return { skipped: false, problems, type };
+}
+
+/**
+ * Best effort: deletes a copy of the app that must not stay around and drops it from
+ * LaunchServices. Spotlight indexes app bundles inside ~/Documents and registers them again
+ * within seconds, so `lsregister -u` sticks only once the bundle is gone (never run it on a
+ * copy that still exists). Returns whether a copy existed.
+ */
+function discardBuildCopy(app) {
+  const existed = existsSync(app);
+  try {
+    rmSync(app, { recursive: true, force: true });
+  } catch (error) {
+    warn(`could not remove ${rel(app)} (${error instanceof Error ? error.message : error}); delete it so Spotlight stops offering it.`);
+    return false;
+  }
+  capture(LSREGISTER, ['-u', app]); // fails harmlessly for a path LaunchServices never saw
+  return existed;
 }
 
 /** Copies release/iPhone AI.app to /Applications (the only supported launch location). */
@@ -591,6 +708,8 @@ function installApp() {
   const verify = capture('/usr/bin/codesign', ['--verify', '--deep', '--strict', target]);
   if (!verify.ok) throw new BuildError(`installed copy failed signature verification: ${verify.output}`);
   info(green(`installed ${target} ✓`));
+  // The copy inside ~/Documents cannot start, but Spotlight would keep offering it.
+  if (discardBuildCopy(source)) info(dim(`removed ${rel(source)}; launch ${target}`));
 }
 
 async function main() {
@@ -607,12 +726,27 @@ async function main() {
     return;
   }
   const identity = await buildApp(chooseIdentity(), options);
-  release(identity, options);
-  if (options.install) installApp();
+  const verified = await release(identity, options);
+  if (options.install) {
+    if (!verified) {
+      throw new BuildError(`the build failed verification (see above); not installing it. ${rel(path.join(releaseDir, APP_NAME))} was kept.`);
+    }
+    installApp();
+  }
 }
 
 // Exported for scripted checks; running the file performs the build.
-export { listIdentities, parseOptions, resolveClaudeCodeBinary, stageCaptureHelper, stageClaudeCode, stageNode, verifyCaptureHelper };
+export {
+  backgroundOnlyCheck,
+  discardBuildCopy,
+  listIdentities,
+  parseOptions,
+  resolveClaudeCodeBinary,
+  stageCaptureHelper,
+  stageClaudeCode,
+  stageNode,
+  verifyCaptureHelper,
+};
 
 if (process.argv[1] && import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href) {
   main().catch((error) => {

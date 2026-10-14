@@ -13,7 +13,7 @@ import {
   Stethoscope,
   TriangleExclamationFill,
 } from '@gravity-ui/icons';
-import { DEFAULT_LIVE_FPS, type HealthCheckItem, type PermissionState } from '@iphone-ai/shared';
+import { DEFAULT_LIVE_FPS, MAX_LIVE_FPS, MIN_LIVE_FPS, type HealthCheckItem, type PermissionState } from '@iphone-ai/shared';
 import { Button, Skeleton, Spinner } from '@heroui/react';
 import { useCallback, useEffect, useState, type ReactNode } from 'react';
 
@@ -23,10 +23,10 @@ import { Panel } from '../../components/Panel';
 import { RelativeTime } from '../../components/RelativeTime';
 import { StatusChip } from '../../components/StatusChip';
 import { api, errorMessage, type DoctorCheck, type HealthCheckResponse, type SettingsPane } from '../../lib/api';
-import { mcpChip, mirroringChip } from '../../lib/device-state';
+import { liveErrorText, mcpChip, mirroringChip } from '../../lib/device-state';
 import { useI18n } from '../../lib/i18n';
 import { applyStatus, notify, notifyError, refreshConnection, restartMcp, useStatus, useStream } from '../../state/store';
-import { errorFor } from './helpers';
+import { doctorFixHint, errorFor } from './helpers';
 import { Notice, NumberRow, Rows, SaveBar, SettingRow, SwitchRow, TextInput, useEditable } from './fields';
 import { SectionFrame, useSectionAccess } from './SectionFrame';
 import { useSectionForm } from './useSectionForm';
@@ -134,7 +134,9 @@ function DoctorPanel() {
             tone={failing === 0 ? 'success' : 'warning'}
             label={failing === 0 ? t('settings.connection.doctor.allOk') : t('settings.connection.doctor.issues', { count: failing })}
           />
-          <CheckList items={checks.map((c) => ({ name: c.name, status: normalizeStatus(c.status), detail: c.detail, fixHint: c.fix_hint }))} />
+          <CheckList
+            items={checks.map((c) => ({ name: c.name, status: normalizeStatus(c.status), detail: c.detail, fixHint: doctorFixHint(c, t('input.reason.paused')) }))}
+          />
         </div>
       ) : null}
     </Panel>
@@ -349,7 +351,8 @@ export function ConnectionSection() {
     liveCapture: draft.screenshot.liveCapture ?? true,
     liveFps: draft.screenshot.liveFps ?? DEFAULT_LIVE_FPS,
   };
-  const liveProblem = shot.liveCapture && stream && !stream.liveAvailable ? stream.liveError : null;
+  const liveError = stream?.liveError ? liveErrorText(stream.liveError, t) : null;
+  const liveProblem = shot.liveCapture && stream && !stream.liveAvailable ? liveError : null;
   const binaryChanged = Boolean(form.patch.mirroirBinaryPath !== undefined || form.patch.target !== undefined);
 
   return (
@@ -443,8 +446,8 @@ export function ConnectionSection() {
             description={t('settings.connection.live.fps.description')}
             value={shot.liveFps}
             onChange={(v) => form.set('screenshot', { ...shot, liveFps: v ?? Number.NaN })}
-            minValue={5}
-            maxValue={60}
+            minValue={MIN_LIVE_FPS}
+            maxValue={MAX_LIVE_FPS}
             step={1}
             unit={t('settings.unit.fps')}
             isDisabled={!shot.liveCapture}

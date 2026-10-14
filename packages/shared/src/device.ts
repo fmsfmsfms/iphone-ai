@@ -152,11 +152,22 @@ export interface StreamStats {
   viewers: number;
   consecutiveErrors: number;
   lastError: string | null;
-  /** A ScreenCaptureKit capture helper is installed and live capture is enabled in settings. */
+  /**
+   * A ScreenCaptureKit capture helper is installed and live capture is enabled
+   * in settings (false while it is turned off for this session because it made
+   * Mirroir report iPhone Mirroring as paused; `liveError` then says so).
+   */
   liveAvailable: boolean;
   /** Why live capture is not delivering (helper missing, permission, crash…); null when fine or not needed. */
   liveError: string | null;
 }
+
+/**
+ * `liveError` while live capture is off for the session because it made
+ * Mirroir report iPhone Mirroring as paused (the web shows a translation).
+ */
+export const LIVE_CONFLICT_ERROR =
+  'Live view is off for this session: it made Mirroir report iPhone Mirroring as paused, which blocks control. The screen is updated with Mirroir screenshots instead. Turn Live view off and on again in Settings › iPhone Connection to retry.';
 
 export interface ScreenElement {
   /** Short id the AI uses to reference the element (e1, e2, …). */

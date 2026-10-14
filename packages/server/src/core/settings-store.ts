@@ -34,6 +34,15 @@ const MIGRATIONS: readonly { id: string; apply(settings: AppSettings): void }[] 
       if (settings.connection.requestTimeoutMs === 60000) settings.connection.requestTimeoutMs = 30000;
     },
   },
+  {
+    // 0.2.x: the live view takes single screenshots (at most 15 fps); 30 fps was the old default.
+    id: '2026-10-live-snapshot-fps',
+    apply(settings) {
+      const screenshot = settings.connection.screenshot;
+      if (screenshot.liveFps === 30) screenshot.liveFps = DEFAULT_LIVE_FPS;
+      else if (screenshot.liveFps > MAX_LIVE_FPS) screenshot.liveFps = MAX_LIVE_FPS;
+    },
+  },
 ];
 
 type SettingsListener = (next: AppSettings, previous: AppSettings) => void;
@@ -102,12 +111,13 @@ export class SettingsStore {
       return defaults;
     }
     const merged = mergeDefaults(defaults, stored);
-    sanitize(merged);
     const done = this.appliedMigrations();
     const pending = MIGRATIONS.filter((m) => !done.has(m.id));
+    // Migrations see the stored values: sanitize() would clamp an old default
+    // (e.g. 30 live fps) before it could be recognised.
+    for (const migration of pending) migration.apply(merged);
+    sanitize(merged);
     if (pending.length > 0) {
-      for (const migration of pending) migration.apply(merged);
-      sanitize(merged);
       this.persist(merged);
       this.recordMigrations([...done, ...pending.map((m) => m.id)]);
     }

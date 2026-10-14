@@ -194,7 +194,8 @@ describe('ScreenStream with live capture', () => {
   });
 
   it('pauses polling while live frames arrive, resumes it when the helper dies, and goes live again after the retry', async () => {
-    const { c, s, l, helper } = await setupLive({ crashAfterFrames: 45 }, { retryBaseMs: 2500 });
+    // 10 fps default (single-screenshot capture): the crash comes ~2.5 s in, after the checks below.
+    const { c, s, l, helper } = await setupLive({ crashAfterFrames: 25 }, { retryBaseMs: 2500 });
     s.setViewer('v1', { visible: true, interactive: true });
     await waitFor(() => l.isDelivering(), { timeoutMs: 5000, message: 'live frames never arrived' });
     // Give an in-flight screenshot (started before the handover) time to finish.
@@ -205,13 +206,13 @@ describe('ScreenStream with live capture', () => {
     expect(s.stats()).toMatchObject({
       mode: 'live-screencapturekit',
       running: true,
-      targetFps: 30,
+      targetFps: 10,
       pausedReason: 'Live capture active',
       liveAvailable: true,
       liveError: null,
       viewers: 1,
     });
-    expect(s.stats().measuredFps).toBeGreaterThan(10);
+    expect(s.stats().measuredFps).toBeGreaterThan(5);
     await waitFor(
       () => c.events.some((e: ServerEvent) => e.type === 'stream_stats' && e.stats.mode === 'live-screencapturekit'),
       { timeoutMs: 3000, message: 'no live stream_stats event' },

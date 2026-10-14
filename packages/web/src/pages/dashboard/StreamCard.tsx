@@ -8,6 +8,7 @@ import { KeyValueList } from '../../components/KeyValue';
 import { Panel } from '../../components/Panel';
 import { RelativeTime } from '../../components/RelativeTime';
 import { StatusChip } from '../../components/StatusChip';
+import { liveErrorText } from '../../lib/device-state';
 import { useI18n } from '../../lib/i18n';
 import { useSettings, useStream } from '../../state/store';
 
@@ -35,7 +36,7 @@ export function StreamCard() {
               ) : (
                 <StatusChip tone="warning" size="sm" label={t('dashboard.stream.liveUnavailable')} />
               ),
-              hint: liveCaptureOn && stream.liveError ? <span className="text-warning">{stream.liveError}</span> : undefined,
+              hint: liveCaptureOn && stream.liveError ? <span className="text-warning">{liveErrorText(stream.liveError, t)}</span> : undefined,
             },
             {
               label: t('dashboard.stream.state'),

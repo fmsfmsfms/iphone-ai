@@ -16,7 +16,7 @@ Mirroir falls back to bringing the iPhone Mirroring window to the front for ever
 screenshot, which would constantly steal focus — so polling stays off.
 
 1. System Settings → Privacy & Security → **Screen & System Audio Recording**.
-2. Enable **iPhone AI** (add it with **+** from `/Applications` or the `release/` folder if missing).
+2. Enable **iPhone AI** (add it with **+** from `/Applications` if missing).
 3. **Quit and reopen iPhone AI** — macOS applies the grant on relaunch.
 
 When running from a terminal in development (`pnpm dev`), the grant belongs to the
@@ -34,9 +34,14 @@ terminal app instead.
 
 ## iPhone Mirroring is "Paused"
 
-Unlock your iPhone and click **Resume** in the iPhone Mirroring window, or press
-**Resume** in iPhone AI's viewer (Mirroir clicks the button for you). The phone must be
-locked and nearby for iPhone Mirroring to work (Apple's requirement).
+iPhone Mirroring pauses when the iPhone is unlocked or used, and after a few idle minutes.
+**Lock your iPhone**, keep it nearby, then click **Resume** in the iPhone Mirroring window or
+in iPhone AI's viewer (Mirroir clicks the button for you).
+
+If iPhone AI says **Paused** while the iPhone Mirroring window is clearly live, Mirroir's
+pause check is misreading the window. iPhone AI turns its live capture off automatically
+when that is the cause (the viewer then polls screenshots). If it persists, turn **Live
+capture** off in Settings → iPhone Connection and report the Mirroir version.
 
 ## After rebuilding the app, permissions stop working
 

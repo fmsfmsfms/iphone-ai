@@ -184,6 +184,7 @@ export const settingsPatchSchema = z
           // Optional so older clients that send the four polling fields keep working
           // (the backend keeps the current values for omitted keys).
           liveCapture: z.boolean().optional(),
+          // Up to 60 is still accepted from older clients; the backend stores at most MAX_LIVE_FPS (15).
           liveFps: z.number().int().min(5).max(60).optional(),
         }),
       })

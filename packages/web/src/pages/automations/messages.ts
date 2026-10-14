@@ -294,7 +294,7 @@ registerMessages('automations', {
     'run.reason.otherRun': '“{name}” is running. Stop it first.',
     'run.reason.aiTask': 'An AI task is running. Wait for it to finish or cancel it.',
     'run.reason.mcp': 'The Mirroir MCP server isn’t ready. Check the connection on the Dashboard.',
-    'run.reason.paused': 'iPhone Mirroring is paused. Unlock your iPhone or click Resume.',
+    'run.reason.paused': 'iPhone Mirroring is paused. Lock your iPhone and keep it nearby, then click Resume.',
     'run.reason.notConnected': 'iPhone Mirroring isn’t connected. Open it and connect your iPhone.',
 
     'stepStatus.pending': 'Pending',
@@ -682,7 +682,7 @@ registerMessages('automations', {
     'run.reason.otherRun': '«{name}» قيد التشغيل. أوقفه أولًا.',
     'run.reason.aiTask': 'هناك مهمة ذكاء اصطناعي قيد التنفيذ. انتظر انتهاءها أو ألغِها.',
     'run.reason.mcp': 'خادم Mirroir MCP غير جاهز. تحقق من الاتصال في لوحة التحكم.',
-    'run.reason.paused': 'iPhone Mirroring متوقف مؤقتًا. افتح قفل iPhone أو انقر «استئناف».',
+    'run.reason.paused': 'iPhone Mirroring متوقف مؤقتًا. اقفل iPhone وأبقه قريبًا، ثم انقر «استئناف».',
     'run.reason.notConnected': 'iPhone Mirroring غير متصل. افتحه وصِل جهاز iPhone.',
 
     'stepStatus.pending': 'بالانتظار',

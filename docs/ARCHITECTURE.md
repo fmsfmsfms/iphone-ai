@@ -12,7 +12,7 @@
 │            passcode sessions), Host + Origin + CSRF checks, static UI                │
 │ device/    DeviceController — ONE serialized lane to the phone: priority queue,      │
 │            control lease (manual vs AI vs workflow), emergency-stop latch, live      │
-│            geometry checks; LiveCapture — ScreenCaptureKit helper frames (/ws/screen);│
+│            geometry checks; LiveCapture — ScreenCaptureKit screenshot frames (/ws/screen)│
 │            ScreenStream — throttled screenshot polling when live frames stop          │
 │ mcp/       MirroirManager — MCP client (official SDK) for the installed Mirroir      │
 │            binary over stdio; parsers for Mirroir's text outputs; project-local      │
@@ -29,7 +29,7 @@
 │ Mirroir MCP (installed,    │ CGEvent│ Apple iPhone Mirroring.app     │  ⇄  physical iPhone
 │ unmodified) v0.40.1        ├───────►│ (window = the phone screen)    │
 └────────────────────────────┘ SCK/AX └───────────────▲───────────────┘
- iphone-ai-capture (bundled Swift helper, capture only) ─┘ SCStream → JPEG → backend → UI
+ iphone-ai-capture (bundled Swift helper, capture only) ─┘ SCK screenshots → JPEG → backend → UI
 ```
 
 ## Facts about Mirroir that shape the design (verified in its source, v0.40.1)

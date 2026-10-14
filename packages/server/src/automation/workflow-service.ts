@@ -290,7 +290,7 @@ export class WorkflowService implements WorkflowServiceApi {
     if (mirroring.state !== 'connected') {
       throw new WorkflowError(
         mirroring.state === 'paused'
-          ? 'iPhone Mirroring is paused. Unlock the iPhone or click Resume, then run the workflow again.'
+          ? 'iPhone Mirroring is paused. Lock your iPhone and keep it nearby, click Resume, then run the workflow again.'
           : 'iPhone Mirroring is not connected. Connect it, then run the workflow again.',
         'not_connected',
       );

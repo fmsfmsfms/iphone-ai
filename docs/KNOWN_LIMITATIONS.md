@@ -2,11 +2,11 @@
 
 ## Platform (Apple / Mirroir)
 
-- **Live view needs its own Screen Recording grant.** The viewer streams the iPhone
-  Mirroring window with ScreenCaptureKit (the bundled `iphone-ai-capture` helper, up to
-  30 fps). Without the grant, or if the helper fails, it falls back to polling Mirroir's
-  `screenshot` tool (≈2 fps, PNG over MCP). The viewer shows which source is live and the
-  measured FPS/latency.
+- **Live view is fast screenshots, not video.** The bundled `iphone-ai-capture` helper
+  takes ScreenCaptureKit screenshots of the iPhone Mirroring window (10 fps by default,
+  15 at most). It needs iPhone AI's Screen Recording grant. Without it, or if the helper
+  fails, the viewer falls back to polling Mirroir's `screenshot` tool (≈2 fps, PNG over
+  MCP). The viewer shows which source is live and the measured FPS/latency.
 - **Every input action costs ~0.6 s of window activation.** Mirroir brings iPhone
   Mirroring to the front and waits for macOS to settle before each tap or gesture. This
   is inside Mirroir and is not changed by iPhone AI.
@@ -22,7 +22,10 @@
 - **`open_url` is unsupported** for the iPhone target (Mirroir refuses it). The AI opens
   Safari and types the address instead.
 - **`press_back` always reports success** in Mirroir; iPhone AI verifies by re-observing.
-- **Paused / locked phone.** When iPhone Mirroring is paused, screenshots and input
+- **The iPhone must stay locked.** iPhone Mirroring pauses or ends the session when the
+  iPhone is unlocked or used, and after a few idle minutes. Lock the iPhone, keep it
+  nearby, then resume.
+- **Paused phone.** When iPhone Mirroring is paused, screenshots and input
   would make Mirroir click "Resume"; iPhone AI waits for you instead (a Resume button is
   provided).
 - **OCR-based perception.** Screen understanding uses Mirroir's on-device OCR plus
@@ -55,7 +58,19 @@
 ## Live view (ScreenCaptureKit)
 
 The `iphone-ai-capture` helper captures only the Mirroring window, never posts input and
-never presses Resume. Frames are used for display only: the AI and touch mapping still use
+never presses Resume. It runs as a background-only process (no Dock icon) and is
+attributed to iPhone AI for Screen Recording.
+
+**Why screenshots and not a video stream.** v0.2.0 streamed the window with `SCStream`
+(≈29 fps measured on the real iPhone). On macOS 27, a stream makes iPhone Mirroring add an
+overlay for the "window is being streamed" state. Mirroir 0.40.1's pause detector reads
+that overlay as an interruption and reports **Paused** while the session is live, which
+blocks all control. Single ScreenCaptureKit screenshots (what Mirroir itself uses) don't
+trigger it, so v0.3.0 captures screenshots at up to 15 fps. As a safety net, if Mirroir
+switches to Paused while live capture runs and switches back to Connected once capture
+stops, iPhone AI turns live capture off for the session and falls back to polling (toggle
+Live capture in Settings to retry). `--mode stream` remains in the helper for diagnostics only.
+ Frames are used for display only: the AI and touch mapping still use
 Mirroir's own screenshots and window geometry, so a stale or mismatched live frame cannot
 misplace a tap. Polling pauses only while live frames actually arrive (one within the last
 2 s) and resumes on its own when they stop.

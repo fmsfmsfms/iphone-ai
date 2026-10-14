@@ -1,6 +1,7 @@
 // Pure helpers for the Settings page: section routing, draft diffing and
 // rebasing, validation (shared zod schemas → translated field errors), parsing
-// API validation errors, network-address checks and provider/rule factories.
+// API validation errors, network-address checks, provider/rule factories and
+// Mirroir doctor hint corrections.
 
 import {
   DEFAULT_PROVIDERS,
@@ -10,6 +11,8 @@ import {
   type ProviderConfig,
   type SensitiveRule,
 } from '@iphone-ai/shared';
+
+import type { DoctorCheck } from '../../lib/api';
 
 export type SectionId = 'general' | 'connection' | 'providers' | 'permissions' | 'automation' | 'privacy' | 'remote' | 'advanced';
 
@@ -374,4 +377,14 @@ export function ruleIdFromLabel(label: string, existing: readonly SensitiveRule[
 export function toggleInList<T>(list: readonly T[], value: T, on: boolean): T[] {
   const without = list.filter((v) => v !== value);
   return on ? [...without, value] : without;
+}
+
+/**
+ * Mirroir doctor's hint for a paused session says to unlock the iPhone, but
+ * iPhone Mirroring needs it locked (unlocking pauses the session again), so
+ * that hint is replaced with `pausedHint`. Other hints are shown as-is.
+ */
+export function doctorFixHint(check: DoctorCheck, pausedHint: string): string | undefined {
+  const hint = check.fix_hint;
+  return hint && /\bunlock/i.test(hint) && /paused/i.test(`${check.detail} ${hint}`) ? pausedHint : hint;
 }

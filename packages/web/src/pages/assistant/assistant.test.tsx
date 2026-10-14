@@ -85,7 +85,7 @@ describe('ConversationView', () => {
     });
     render(<ConversationView conversation={null} onCreated={vi.fn()} onChanged={vi.fn()} onDelete={vi.fn()} />);
     expect(screen.getByRole('textbox', { name: 'Instruction for the AI' })).toBeDisabled();
-    expect(screen.getAllByText('iPhone Mirroring is paused. Unlock your iPhone or click Resume in Live Control.').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('iPhone Mirroring is paused. Lock your iPhone and keep it nearby, then click Resume in Live Control.').length).toBeGreaterThan(0);
     expect(screen.getByText(/can look and describe, but not tap/)).toBeInTheDocument();
   });
 });

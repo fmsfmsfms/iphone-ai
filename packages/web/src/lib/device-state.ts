@@ -1,6 +1,7 @@
 // Derived, display-oriented state: status chip tones, why input is disabled,
 // whether an AI provider is usable. Pure functions returning i18n keys.
 
+import { LIVE_CONFLICT_ERROR } from '@iphone-ai/shared';
 import type {
   AgentTask,
   AppSettings,
@@ -39,6 +40,11 @@ export function mcpChip(state: McpServerState | undefined): ChipInfo {
     default:
       return { tone: 'default', labelKey: 'status.mcp.unknown', hintKey: 'status.mcp.unknownHint' };
   }
+}
+
+/** A live-capture error for display: the backend's conflict sentence is shown translated. */
+export function liveErrorText(error: string, t: (key: string) => string): string {
+  return error === LIVE_CONFLICT_ERROR ? t('viewer.liveConflict') : error;
 }
 
 export function mirroringChip(state: MirroringState | undefined): ChipInfo {

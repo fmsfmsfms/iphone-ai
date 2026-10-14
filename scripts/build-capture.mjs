@@ -5,10 +5,14 @@
 // and re-signed there with the app identity). The local copy is ad-hoc signed so it also
 // runs from the repo (development backend fallback).
 //
+// src-tauri/capture/Info.plist is embedded at link time (__TEXT,__info_plist): it declares
+// LSBackgroundOnly, so the helper checks in with LaunchServices as a background-only process
+// instead of as a second "iPhone AI" Dock app (see the comment in that file).
+//
 //   node scripts/build-capture.mjs [--force] [--target aarch64-apple-darwin|x86_64-apple-darwin]
 //
-// Skips the compile when the source, compiler and flags are unchanged (use --force to
-// rebuild). Run automatically by `pnpm package:mac` (also with --stage-only).
+// Skips the compile when the source, Info.plist, compiler and flags are unchanged (use
+// --force to rebuild). Run automatically by `pnpm package:mac` (also with --stage-only).
 
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
@@ -31,6 +35,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const source = path.join(root, 'src-tauri', 'capture', 'main.swift');
+const infoPlist = path.join(root, 'src-tauri', 'capture', 'Info.plist');
 const binariesDir = path.join(root, 'src-tauri', 'binaries');
 export const CAPTURE_NAME = 'iphone-ai-capture';
 const MIN_MACOS = '15.0';
@@ -70,7 +75,11 @@ export function buildCapture({ force = false, target = hostTriple(), log = conso
   if (process.platform !== 'darwin') throw new CaptureBuildError('the capture helper can only be built on macOS.');
   const arch = SWIFT_TARGETS[target];
   if (!arch) throw new CaptureBuildError(`unsupported target ${target} (expected ${Object.keys(SWIFT_TARGETS).join(' or ')})`);
-  if (!existsSync(source)) throw new CaptureBuildError(`${path.relative(root, source)} is missing.`);
+  for (const file of [source, infoPlist]) {
+    if (!existsSync(file)) throw new CaptureBuildError(`${path.relative(root, file)} is missing.`);
+  }
+  const lint = capture('/usr/bin/plutil', ['-lint', infoPlist]);
+  if (!lint.ok) throw new CaptureBuildError(`${path.relative(root, infoPlist)} is not a valid plist: ${lint.output.trim()}`);
   if (!existsSync('/usr/bin/xcrun')) {
     throw new CaptureBuildError('xcrun not found — install the Xcode Command Line Tools (xcode-select --install).');
   }
@@ -91,10 +100,14 @@ export function buildCapture({ force = false, target = hostTriple(), log = conso
     `${arch}-apple-macos${MIN_MACOS}`,
     '-parse-as-library',
     ...FRAMEWORKS.flatMap((name) => ['-framework', name]),
+    // One argv entry each (the repo path contains a space; never join and re-split these).
+    ...['-sectcreate', '__TEXT', '__info_plist', infoPlist].flatMap((arg) => ['-Xlinker', arg]),
   ];
   const stampFile = path.join(binariesDir, `.${CAPTURE_NAME}-${target}.stamp`);
   const stamp = createHash('sha256')
     .update(readFileSync(source))
+    .update('\0')
+    .update(readFileSync(infoPlist))
     .update('\0')
     .update(flags.join(' '))
     .update('\0')
@@ -117,7 +130,7 @@ export function buildCapture({ force = false, target = hostTriple(), log = conso
   try {
     const compiled = path.join(workDir, CAPTURE_NAME);
     const args = ['--sdk', 'macosx', 'swiftc', ...flags, '-o', compiled, source];
-    log(`  $ xcrun ${args.join(' ')}`);
+    log(`  $ xcrun ${args.map((arg) => (/\s/.test(arg) ? JSON.stringify(arg) : arg)).join(' ')}`);
     const compile = capture('/usr/bin/xcrun', args, { timeout: 600_000 });
     if (compile.output.trim()) log(compile.output.trim().replace(/^/gm, '    '));
     if (!compile.ok) throw new CaptureBuildError(`swiftc failed (${compile.error?.message ?? `exit ${compile.status}`}).`);
@@ -143,11 +156,24 @@ export function buildCapture({ force = false, target = hostTriple(), log = conso
   }
 }
 
-/** `--help` must exit 0 and print the usage (never touches ScreenCaptureKit). */
+/**
+ * `--help` must exit 0 and print the usage (never touches ScreenCaptureKit or the window
+ * server), and the binary must carry the embedded Info.plist with LSBackgroundOnly.
+ */
 export function smokeTest(binary) {
   const result = capture(binary, ['--help'], { timeout: 15_000 });
-  if (result.ok && result.stdout.includes(`usage: ${CAPTURE_NAME}`)) return { ok: true, detail: 'ok' };
-  return { ok: false, detail: (result.error?.message ?? `exit ${result.status}: ${result.output}`).trim() };
+  if (!result.ok || !result.stdout.includes(`usage: ${CAPTURE_NAME}`)) {
+    return { ok: false, detail: `--help: ${(result.error?.message ?? `exit ${result.status}: ${result.output}`).trim()}` };
+  }
+  return embeddedPlistCheck(binary);
+}
+
+/** The Info.plist linked into __TEXT,__info_plist must declare LSBackgroundOnly. */
+export function embeddedPlistCheck(binary) {
+  const plist = capture('/bin/launchctl', ['plist', '__TEXT,__info_plist', binary], { timeout: 15_000 });
+  if (plist.ok && /"LSBackgroundOnly" = (true|1);/.test(plist.output)) return { ok: true, detail: 'ok' };
+  const detail = (plist.error?.message ?? (plist.output.trim() || `exit ${plist.status}`)).replace(/\s+/g, ' ');
+  return { ok: false, detail: `the embedded Info.plist does not declare LSBackgroundOnly (launchctl plist: ${detail})` };
 }
 
 function parseArgs(argv) {

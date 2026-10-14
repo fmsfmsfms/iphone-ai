@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 
 import type { DeviceStatus, MirroringState, WindowGeometry } from '@iphone-ai/shared';
 
-import type { CaptureHelperCommand, HelperFrameHeader, HelperStatus, LiveCaptureDevice } from '../../src/device/live-capture.js';
+import type { CaptureHelperCommand, HelperFrameHeader, HelperStatus, LiveActivityEntry, LiveCaptureDevice } from '../../src/device/live-capture.js';
 import { makeGeometry } from '../../src/mcp/parsers.js';
 
 export const FAKE_HELPER = path.resolve(path.dirname(fileURLToPath(import.meta.url)), 'fake-capture-helper.mjs');
@@ -75,6 +75,14 @@ export class FakeLiveDevice implements LiveCaptureDevice {
   controlOwner: DeviceStatus['controlOwner'] = 'none';
   geometry: WindowGeometry | null = makeGeometry(410, 898, 'portrait');
   seq = 0;
+  /** Connection activity rows LiveCapture recorded. */
+  activity: LiveActivityEntry[] = [];
+  /** When a user capture last made Mirroir press Resume. */
+  lastUserResumeAt: number | null = null;
+
+  recordConnectionActivity(entry: LiveActivityEntry): void {
+    this.activity.push(entry);
+  }
 
   nextFrameSeq(): number {
     this.seq += 1;

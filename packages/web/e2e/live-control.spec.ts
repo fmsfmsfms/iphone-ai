@@ -115,7 +115,7 @@ test('paused and not-running iPhone Mirroring show what to do next', async ({ pa
 
   writeMockState({ mirroring: 'paused' });
   await expect(viewer.getByText('iPhone Mirroring is paused', { exact: true })).toBeVisible({ timeout: 20_000 });
-  await expect(viewer.getByText('Unlock your iPhone, or click Resume to continue the session.')).toBeVisible();
+  await expect(viewer.getByText('Lock your iPhone and keep it nearby, then click Resume to continue the session.')).toBeVisible();
   await expect(viewer.getByRole('button', { name: 'Resume' })).toBeVisible();
   await expect(page.getByRole('banner', { name: 'Status' }).getByRole('button', { name: 'Mirroring paused' })).toBeVisible();
 

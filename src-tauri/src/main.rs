@@ -6,8 +6,11 @@
 //! group when the app quits. The page never gets IPC: no commands are registered
 //! and no capabilities are granted; navigation is limited to the splash page and
 //! the backend's own origin, and everything else opens in the default browser.
+//! A copy started from a privacy-protected folder first hands off to the installed
+//! copy in /Applications when it can (see handoff.rs).
 
 mod backend;
+mod handoff;
 mod menu;
 mod pages;
 mod system;
@@ -32,6 +35,12 @@ const MIN_HEIGHT: f64 = 720.0;
 const BACKGROUND: Color = Color(11, 12, 16, 255);
 
 fn main() {
+    let context = tauri::generate_context!();
+    let version = context.package_info().version.to_string();
+    if handoff::hand_off_to_installed_copy(&context.config().identifier, &version) {
+        return;
+    }
+
     let app = tauri::Builder::default()
         .menu(menu::build)
         .on_menu_event(menu::handle)
@@ -43,7 +52,7 @@ fn main() {
             backend.start();
             Ok(())
         })
-        .build(tauri::generate_context!())
+        .build(context)
         .expect("failed to initialise the iPhone AI shell");
 
     app.run(|app, event| match event {

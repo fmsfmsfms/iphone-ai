@@ -6,9 +6,14 @@ import type { AppSettings, SensitiveRule } from './settings.js';
 export const DEFAULT_MIRROIR_BINARY = '/opt/homebrew/bin/mirroir';
 
 /** Default frame rate of the ScreenCaptureKit live capture helper. */
-export const DEFAULT_LIVE_FPS = 30;
+export const DEFAULT_LIVE_FPS = 10;
 export const MIN_LIVE_FPS = 5;
-export const MAX_LIVE_FPS = 60;
+/**
+ * Highest live frame rate. The helper takes single window screenshots (the
+ * capture Mirroir's own screenshot tool uses), capped at 15 per second; the
+ * settings API still accepts up to 60 from older clients and stores at most this.
+ */
+export const MAX_LIVE_FPS = 15;
 
 export const DEFAULT_BLOCKED_APPS: readonly string[] = [
   // Apple

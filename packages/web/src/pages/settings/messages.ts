@@ -120,9 +120,9 @@ registerMessages('settings', {
       'With live capture on, the view shows frames captured straight from the iPhone Mirroring window with ScreenCaptureKit, so Mirroir isn’t asked for screenshots and your taps and swipes aren’t delayed. When live frames aren’t available, the view falls back to polled screenshots that Mirroir takes; higher rates feel smoother but use more of your Mac’s resources.',
     'connection.live.label': 'Live view (ScreenCaptureKit)',
     'connection.live.description':
-      'Streams the iPhone Mirroring window directly instead of polling screenshots through Mirroir. Uses the Screen Recording permission; frames are shown, never stored.',
+      'Captures the iPhone Mirroring window directly, one screenshot at a time up to the frame rate below, instead of asking Mirroir for screenshots. Uses the Screen Recording permission; frames are shown, never stored.',
     'connection.live.fps.label': 'Live frame rate',
-    'connection.live.fps.description': 'Highest frame rate for the live view (5–60). Remote devices receive at most 10 fps.',
+    'connection.live.fps.description': 'Highest frame rate for the live view (5–15). Remote devices receive at most 10 fps.',
     'connection.live.available': 'Live capture available',
     'connection.live.unavailable': 'Live capture unavailable — screenshots are polled instead',
     'connection.live.off': 'Live capture is off — screenshots are polled',
@@ -666,9 +666,9 @@ registerMessages('settings', {
       'عند تفعيل الالتقاط المباشر يعرض التطبيق إطارات تُلتقط مباشرة من نافذة iPhone Mirroring عبر ScreenCaptureKit، فلا يُطلب من Mirroir التقاط لقطات ولا تتأخر نقراتك وسحباتك. وعندما لا تتوفر الإطارات المباشرة يعود العرض إلى لقطات شاشة متتالية يلتقطها Mirroir؛ المعدلات الأعلى أكثر سلاسة لكنها تستهلك موارد أكثر من جهاز الـ Mac.',
     'connection.live.label': 'العرض المباشر (ScreenCaptureKit)',
     'connection.live.description':
-      'يبث نافذة iPhone Mirroring مباشرة بدلًا من التقاط لقطات دورية عبر Mirroir. يستخدم إذن تسجيل الشاشة؛ تُعرض الإطارات ولا تُخزَّن أبدًا.',
+      'يلتقط نافذة iPhone Mirroring مباشرة، لقطة واحدة في كل مرة حتى معدل الإطارات أدناه، بدلًا من طلب لقطات الشاشة من Mirroir. يستخدم إذن تسجيل الشاشة؛ تُعرض الإطارات ولا تُخزَّن أبدًا.',
     'connection.live.fps.label': 'معدل الإطارات المباشرة',
-    'connection.live.fps.description': 'أعلى معدل إطارات للعرض المباشر (5–60). تتلقى الأجهزة البعيدة 10 إطارات/ث كحد أقصى.',
+    'connection.live.fps.description': 'أعلى معدل إطارات للعرض المباشر (5–15). تتلقى الأجهزة البعيدة 10 إطارات/ث كحد أقصى.',
     'connection.live.available': 'الالتقاط المباشر متاح',
     'connection.live.unavailable': 'الالتقاط المباشر غير متاح — تُلتقط لقطات دورية بدلًا منه',
     'connection.live.off': 'الالتقاط المباشر متوقف — تُلتقط لقطات دورية',

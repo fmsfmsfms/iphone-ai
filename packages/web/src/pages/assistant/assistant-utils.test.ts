@@ -89,7 +89,7 @@ describe('explainTaskFailure', () => {
     expect(failed('Time limit reached (300s).')).toMatchObject({ kind: 'timeout' });
     expect(failed('The task reached its step limit before finishing.')).toMatchObject({ kind: 'stepLimit' });
     expect(failed('Stopped: the AI kept repeating actions that did not change the screen.')).toMatchObject({ kind: 'loop' });
-    expect(failed('iPhone Mirroring is paused. Unlock the iPhone or click Resume.')).toMatchObject({ kind: 'mirroring', action: 'live' });
+    expect(failed('iPhone Mirroring is paused. Lock your iPhone and keep it nearby, then click Resume.')).toMatchObject({ kind: 'mirroring', action: 'live' });
     expect(failed('Something odd')).toMatchObject({ kind: 'generic', canRetry: true });
   });
 

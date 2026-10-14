@@ -21,7 +21,8 @@ pnpm package:mac -- --install
 ```
 
 This builds the UI and backend, bundles the official Node.js runtime and (optionally) the
-Claude Code engine, and produces **`release/iPhone AI.app`**. Pass `-- --no-claude-code`
+Claude Code engine, and produces **`release/iPhone AI.app`** (removed again by `--install`
+once the copy in /Applications is verified). Pass `-- --no-claude-code`
 to skip the ~240 MB Claude Code engine if you will not use the "Claude Code login"
 provider.
 
@@ -31,9 +32,12 @@ macOS privacy permissions are tied to the signature, so ad-hoc builds lose their
 after every rebuild. If macOS asks whether `codesign` may use your key, choose **Always Allow**.
 
 `--install` copies it to **`/Applications/iPhone AI.app`** (quit iPhone AI first when
-rebuilding). Always launch that copy: macOS privacy protection blocks an app inside
+rebuilding) and deletes the build copies, so Spotlight and the Dock offer only one
+iPhone AI. Always launch that copy: macOS privacy protection blocks an app inside
 `~/Documents`, `~/Desktop`, `~/Downloads` or iCloud Drive from reading its own bundled
-server until a prompt is answered, so the app refuses to start there and asks you to move it.
+server until a prompt is answered. A copy started from there opens
+/Applications/iPhone AI.app instead when that one is the same version or newer; otherwise it
+asks you to install it.
 The packaging script downloads the official Node.js runtime from nodejs.org and verifies its
 SHA-256 against nodejs.org's published checksums before bundling it.
 
@@ -41,7 +45,8 @@ SHA-256 against nodejs.org's published checksums before bundling it.
 
 1. Open **iPhone AI**. It starts its backend and Mirroir automatically.
 2. Follow **Dashboard → Setup checklist**:
-   - **iPhone Mirroring** — click *Open iPhone Mirroring*; unlock your phone if asked.
+   - **iPhone Mirroring** — click *Open iPhone Mirroring* and approve on the iPhone if asked,
+     then **lock the iPhone** and keep it nearby (iPhone Mirroring only runs while it is locked).
    - **Screen Recording** — *Open settings*, enable **iPhone AI**, then **quit and reopen** iPhone AI.
    - **Accessibility** — *Open settings*, enable **iPhone AI**.
    - **Automation** — the first time input is sent, macOS asks whether iPhone AI may
@@ -53,8 +58,8 @@ SHA-256 against nodejs.org's published checksums before bundling it.
 
 ## 4. Live Control
 
-- The center viewer shows the phone screen as a **live ScreenCaptureKit stream** (up to
-  30 fps) once iPhone AI has Screen Recording permission. Without it, it falls back to
+- The center viewer shows the phone screen **live** (ScreenCaptureKit screenshots, 10 fps
+  by default, up to 15) once iPhone AI has Screen Recording permission. Without it, it falls back to
   polled screenshots (≈2 fps). The panel shows the source and the measured FPS/latency.
 - Turn on **Manual control** (left panel or `M`) to interact: click = tap, drag = a finger
   flick or drag (like a real finger, so feeds page one item at a time), arrow keys flick,

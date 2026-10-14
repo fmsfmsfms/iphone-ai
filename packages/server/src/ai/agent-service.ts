@@ -402,7 +402,7 @@ export class AgentService implements AgentServiceApi {
     if (status.permissions.screenRecording !== 'granted') {
       throw new DeviceError('Screen Recording permission is not confirmed for iPhone AI, so the AI cannot see the screen.', 'screen_capture_unavailable', 412);
     }
-    if (status.mirroring.state === 'paused') throw new DeviceError('iPhone Mirroring is paused. Unlock the iPhone or click Resume.', 'paused');
+    if (status.mirroring.state === 'paused') throw new DeviceError('iPhone Mirroring is paused. Lock your iPhone and keep it nearby, then click Resume.', 'paused');
     if (status.mirroring.state !== 'connected') throw new DeviceError('iPhone Mirroring is not connected.', 'not_connected');
   }
 

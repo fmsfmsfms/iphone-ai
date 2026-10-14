@@ -36,7 +36,7 @@ export interface ConnectionSettings {
      * the helper is available. Polling takes over automatically if it fails.
      */
     liveCapture: boolean;
-    /** Frames per second requested from the live capture helper (5–60). */
+    /** Frames per second requested from the live capture helper (5–15). */
     liveFps: number;
   };
 }

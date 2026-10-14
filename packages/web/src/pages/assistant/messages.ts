@@ -76,7 +76,7 @@ registerMessages('assistant', {
     'reason.loading': 'Checking the connection to your iPhone…',
     'reason.mcp': 'The Mirroir MCP server isn’t ready, so the AI can’t see your iPhone.',
     'reason.screenRecording': 'Screen Recording permission is missing, so the AI can’t see your iPhone.',
-    'reason.paused': 'iPhone Mirroring is paused. Unlock your iPhone or click Resume in Live Control.',
+    'reason.paused': 'iPhone Mirroring is paused. Lock your iPhone and keep it nearby, then click Resume in Live Control.',
     'reason.notConnected': 'iPhone Mirroring isn’t connected. Open it and connect your iPhone.',
     'reason.disclosure': 'Read the privacy notice above to continue.',
 
@@ -209,7 +209,7 @@ registerMessages('assistant', {
     'reason.loading': 'جارٍ التحقق من الاتصال بجهاز iPhone…',
     'reason.mcp': 'خادم Mirroir MCP غير جاهز، لذا لا يستطيع الذكاء الاصطناعي رؤية iPhone.',
     'reason.screenRecording': 'إذن تسجيل الشاشة غير ممنوح، لذا لا يستطيع الذكاء الاصطناعي رؤية iPhone.',
-    'reason.paused': 'iPhone Mirroring متوقف مؤقتًا. افتح قفل iPhone أو انقر «استئناف» في التحكم المباشر.',
+    'reason.paused': 'iPhone Mirroring متوقف مؤقتًا. اقفل iPhone وأبقه قريبًا، ثم انقر «استئناف» في التحكم المباشر.',
     'reason.notConnected': 'iPhone Mirroring غير متصل. افتحه وصِل جهاز iPhone.',
     'reason.disclosure': 'اقرأ إشعار الخصوصية أعلاه للمتابعة.',
 

@@ -6,6 +6,7 @@ import {
   classifyIPv4,
   deepEqual,
   diffSection,
+  doctorFixHint,
   errorFor,
   hasChanges,
   isPrivateAddress,
@@ -181,5 +182,27 @@ describe('permission editors', () => {
     expect(toggleInList(['tap', 'swipe'], 'tap', false)).toEqual(['swipe']);
     expect(toggleInList(['swipe'], 'tap', true)).toEqual(['swipe', 'tap']);
     expect(toggleInList(['tap'], 'tap', true)).toEqual(['tap']);
+  });
+});
+
+describe('doctorFixHint', () => {
+  const PAUSED = 'iPhone Mirroring is paused. Lock your iPhone and keep it nearby, then click Resume.';
+
+  it('replaces Mirroir doctor’s "unlock" hint for a paused session (iPhone Mirroring needs the iPhone locked)', () => {
+    const check = {
+      name: 'Mirroring connected',
+      status: 'failed',
+      detail: 'paused',
+      fix_hint: 'iPhone Mirroring is paused. Unlock your iPhone and click Resume in the mirroring window.',
+    };
+    expect(doctorFixHint(check, PAUSED)).toBe(PAUSED);
+  });
+
+  it('keeps every other hint as Mirroir wrote it', () => {
+    const accessibility = { name: 'Accessibility', status: 'failed', detail: 'not permitted', fix_hint: 'Open System Settings › Privacy & Security › Accessibility' };
+    expect(doctorFixHint(accessibility, PAUSED)).toBe(accessibility.fix_hint);
+    expect(doctorFixHint({ name: 'macOS version', status: 'passed', detail: 'macOS 27' }, PAUSED)).toBeUndefined();
+    const notRunning = { name: 'Mirroring connected', status: 'failed', detail: 'not running', fix_hint: 'Open iPhone Mirroring.' };
+    expect(doctorFixHint(notRunning, PAUSED)).toBe('Open iPhone Mirroring.');
   });
 });

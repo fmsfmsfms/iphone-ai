@@ -1,8 +1,11 @@
 // Live view of the iPhone Mirroring window through the bundled ScreenCaptureKit
 // helper (`iphone-ai-capture`, Swift). Unlike Mirroir's `screenshot` tool —
 // a full PNG over MCP stdio that occupies Mirroir's single serial lane — the
-// helper streams JPEG frames on its stdout and never touches Mirroir, so the
-// lane stays free for actions while the viewer is live.
+// helper sends JPEG frames on its stdout and never touches Mirroir, so the
+// lane stays free for actions while the viewer is live. It takes single
+// window screenshots (at most MAX_LIVE_FPS per second), not a continuous
+// stream: starting a stream makes iPhone Mirroring add overlay UI that
+// Mirroir 0.40.1 reads as "Paused", which blocks all control.
 //
 // Helper protocol (stdout): a sequence of messages, each
 //   [4-byte BE uint32 N = length of the rest][1 byte type][N-1 bytes payload]
@@ -20,6 +23,16 @@
 // 10 s after the last of those goes false. Errors, exits and stalls restart it
 // with backoff; meanwhile ScreenStream polling (which pauses only while live
 // frames are actually arriving) keeps the viewer updated.
+//
+// Conflict safety latch: when Mirroir's state goes from connected to paused
+// while the helper is capturing, the helper is stopped and kept stopped for a
+// short probe. If Mirroir reports connected again within conflictProbeMs of
+// the helper exiting, capture itself caused the "pause": live capture stays
+// off for this backend session (ScreenStream polls Mirroir screenshots
+// instead) until the live capture switch or frame rate is changed. If the
+// pause persists, or the user's Resume (a capture with resume allowed) ended
+// it, it was genuine and the normal rules apply again. The latch
+// only ever stops capture; every input gate keeps using Mirroir's state.
 
 import { spawn, type ChildProcess } from 'node:child_process';
 import { EventEmitter } from 'node:events';
@@ -29,10 +42,13 @@ import { fileURLToPath } from 'node:url';
 
 import {
   DEFAULT_LIVE_FPS,
+  LIVE_CONFLICT_ERROR,
   MAX_LIVE_FPS,
   MIN_LIVE_FPS,
+  type ActivitySeverity,
   type DeviceStatus,
   type LiveFrameHeader,
+  type MirroringState,
   type WindowGeometry,
 } from '@iphone-ai/shared';
 
@@ -47,6 +63,8 @@ export const LIVE_JPEG_QUALITY = 0.7;
 /** ScreenStream polling pauses while a live frame arrived within this window. */
 export const LIVE_WINDOW_MS = 2000;
 export const LIVE_ACTIVE_REASON = 'Live capture active';
+/** Why the helper is not started while the conflict latch is set. */
+export const LIVE_CONFLICT_REASON = 'live view turned off: it made Mirroir report iPhone Mirroring as paused';
 
 const MSG_STATUS = 0x01;
 const MSG_FRAME = 0x02;
@@ -277,12 +295,24 @@ export function resolveCaptureHelper(
 
 // ───────────────────────────── service ─────────────────────────────
 
+/** A connection activity row recorded on LiveCapture's behalf (it has no activity log of its own). */
+export interface LiveActivityEntry {
+  type: string;
+  severity: ActivitySeverity;
+  summary: string;
+  detail?: Record<string, unknown>;
+}
+
 /** What LiveCapture needs from DeviceController (kept narrow for tests). */
 export interface LiveCaptureDevice {
   getStatus(): DeviceStatus;
   readonly geometry: WindowGeometry | null;
   /** Shared frame sequence with Mirroir screenshots, so a higher seq is always newer. */
   nextFrameSeq(): number;
+  /** Records a connection activity row (the conflict latch). */
+  recordConnectionActivity?(entry: LiveActivityEntry): void;
+  /** When a user-allowed capture last made Mirroir press Resume (that resume is not a capture conflict). */
+  readonly lastUserResumeAt?: number | null;
 }
 
 /** A polled Mirroir frame, used to notice a helper that went silent while the screen keeps changing. */
@@ -310,6 +340,11 @@ export interface LiveCaptureTimings {
   tickMs: number;
   /** Grace period after {"cmd":"stop"} + EOF before SIGTERM (SIGKILL 3 s later). */
   killGraceMs: number;
+  /**
+   * Conflict probe: after the helper exited, Mirroir reporting "connected"
+   * again within this window latches live capture off for the session.
+   */
+  conflictProbeMs: number;
 }
 
 export const DEFAULT_LIVE_TIMINGS: LiveCaptureTimings = {
@@ -323,6 +358,7 @@ export const DEFAULT_LIVE_TIMINGS: LiveCaptureTimings = {
   statsIntervalMs: 60_000,
   tickMs: 500,
   killGraceMs: 2000,
+  conflictProbeMs: 5000,
 };
 
 export interface LiveCaptureOptions {
@@ -354,7 +390,7 @@ export class LiveFrame {
 }
 
 export interface LiveCaptureStats {
-  /** Helper installed and live capture enabled in settings. */
+  /** Helper installed, live capture enabled in settings and not latched off by a capture conflict. */
   available: boolean;
   /** A live frame arrived within the live window. */
   delivering: boolean;
@@ -372,7 +408,7 @@ export interface LiveCaptureStats {
   totalFrames: number;
 }
 
-type StopReason = 'idle' | 'disabled' | 'shutdown' | 'stall' | 'protocol' | 'startup-timeout' | 'stuck' | 'error';
+type StopReason = 'idle' | 'disabled' | 'shutdown' | 'conflict-probe' | 'stall' | 'protocol' | 'startup-timeout' | 'stuck' | 'error';
 /** Stops that are failures: the helper is restarted with backoff while it is still needed. */
 const RETRY_REASONS = new Set<StopReason>(['stall', 'protocol', 'startup-timeout', 'stuck', 'error']);
 
@@ -432,6 +468,12 @@ export class LiveCapture extends EventEmitter {
   private lastPolled: PolledFrameInfo | null = null;
   /** The next helper session announces itself at info level. */
   private announce = true;
+  /** Mirroring state seen at the previous evaluation (connected → paused detection). */
+  private lastMirroringState: MirroringState | null = null;
+  /** Conflict probe in progress: the helper was stopped after Mirroir reported a pause while it captured. */
+  private probe: { startedAt: number; helperExitedAt: number | null } | null = null;
+  /** Capture made Mirroir report "paused": live capture stays off until its settings change. */
+  private conflict = false;
 
   constructor(options: LiveCaptureOptions) {
     super();
@@ -453,6 +495,7 @@ export class LiveCapture extends EventEmitter {
     if (!this.helper) {
       this.log.info(`Live capture unavailable: ${this.unavailableReason}`);
     }
+    this.lastMirroringState = this.device.getStatus().mirroring.state;
     // Device status covers lease, permission and Mirroring changes; settings cover the switch and fps.
     this.unsubscribers.push(
       this.hub.subscribe((event) => {
@@ -463,11 +506,14 @@ export class LiveCapture extends EventEmitter {
     this.unsubscribers.push(
       this.settings.onChange((next) => {
         const cfg = next.connection.screenshot;
-        if (cfg.liveFps !== previous.liveFps) this.sendConfig();
+        const fpsChanged = cfg.liveFps !== previous.liveFps;
+        if (fpsChanged) this.sendConfig();
         const toggled = cfg.liveCapture !== previous.liveCapture;
         previous = cfg;
+        // Changing the switch or the frame rate is the user's way to try live capture again.
+        const cleared = (toggled || fpsChanged) && this.clearConflict();
         this.evaluate();
-        if (toggled) this.emitState();
+        if (toggled || cleared) this.emitState();
       }),
     );
     this.tickTimer = setInterval(() => this.tick(), this.t.tickMs);
@@ -519,9 +565,14 @@ export class LiveCapture extends EventEmitter {
 
   // ───────────────────────────── queries ─────────────────────────────
 
-  /** Helper installed and live capture enabled in settings. */
+  /** Helper installed, live capture enabled in settings and not latched off by a capture conflict. */
   get available(): boolean {
-    return this.helper !== null && this.settings.get().connection.screenshot.liveCapture;
+    return this.helper !== null && this.settings.get().connection.screenshot.liveCapture && !this.conflict;
+  }
+
+  /** True while live capture is latched off for this session (it made Mirroir report a pause). */
+  get conflictLatched(): boolean {
+    return this.conflict;
   }
 
   /** True while live frames are arriving (one within the live window). */
@@ -545,7 +596,7 @@ export class LiveCapture extends EventEmitter {
     let error: string | null = null;
     if (!this.helper) error = `Live capture unavailable: ${this.unavailableReason}.`;
     else if (!delivering && this.settings.get().connection.screenshot.liveCapture) {
-      error = this.lastError ?? (session?.phase === 'waiting' ? this.waitingReason : null);
+      error = this.conflict ? LIVE_CONFLICT_ERROR : (this.lastError ?? (session?.phase === 'waiting' ? this.waitingReason : null));
     }
     return {
       available: this.available,
@@ -578,6 +629,10 @@ export class LiveCapture extends EventEmitter {
     if (!this.settings.get().connection.screenshot.liveCapture) {
       return { ok: false, reason: 'live capture is turned off in Settings', immediate: true };
     }
+    if (this.conflict) return { ok: false, reason: LIVE_CONFLICT_REASON, immediate: true };
+    if (this.probe) {
+      return { ok: false, reason: 'checking whether live capture made Mirroir report iPhone Mirroring as paused', immediate: true };
+    }
     const status = this.device.getStatus();
     if (status.permissions.screenRecording !== 'granted') {
       return { ok: false, reason: 'Screen Recording permission not confirmed', immediate: false };
@@ -597,6 +652,7 @@ export class LiveCapture extends EventEmitter {
   /** Re-evaluates whether the helper should run (cheap; called on every relevant change). */
   evaluate(): void {
     if (!this.started) return;
+    this.observeMirroring();
     const want = this.wanted();
     if (want.ok) {
       if (this.stopTimer) {
@@ -627,6 +683,80 @@ export class LiveCapture extends EventEmitter {
       }
     }
     this.updateDelivering();
+  }
+
+  // ───────────────────────────── capture conflict ─────────────────────────────
+
+  /**
+   * Starts a conflict probe on a connected → paused transition while the
+   * helper captures, and settles a running probe from the next status polls.
+   */
+  private observeMirroring(): void {
+    const state = this.device.getStatus().mirroring.state;
+    const previous = this.lastMirroringState;
+    this.lastMirroringState = state;
+    const probe = this.probe;
+    if (probe) {
+      const resumedAt = this.device.lastUserResumeAt ?? null;
+      if (state === 'connected' && resumedAt !== null && resumedAt >= probe.startedAt) {
+        // The user's Resume ended the pause, not stopping capture: it was genuine.
+        this.probe = null;
+        this.log.info('iPhone Mirroring was resumed by the user during the live capture conflict check; the pause was genuine, live capture may run again');
+      } else if (state === 'connected') this.latchConflict(probe);
+      else if (state !== 'paused') {
+        // Not running, no window…: unrelated to capture; the normal rules decide.
+        this.probe = null;
+        this.log.info('Live capture conflict check ended: iPhone Mirroring is no longer paused', { state });
+      }
+      return;
+    }
+    if (previous !== 'connected' || state !== 'paused' || this.conflict) return;
+    const session = this.session;
+    if (!session || session.stopping || session.ended || session.phase !== 'capturing') return;
+    this.probe = { startedAt: Date.now(), helperExitedAt: null };
+    this.log.info('Mirroir reported iPhone Mirroring as paused while live capture was running; stopping the helper to check whether capture caused it', {
+      frames: session.frames,
+    });
+    this.stopHelper(session, 'conflict-probe');
+  }
+
+  /** Mirroir reported connected again right after the helper stopped: capture caused the "pause". */
+  private latchConflict(probe: { startedAt: number; helperExitedAt: number | null }): void {
+    this.probe = null;
+    this.conflict = true;
+    const sinceStopMs = probe.helperExitedAt === null ? null : Date.now() - probe.helperExitedAt;
+    this.log.warn(`Live capture turned off for this session: ${LIVE_CONFLICT_REASON} (polling screenshots instead)`, {
+      probeMs: Date.now() - probe.startedAt,
+      sinceHelperExitMs: sinceStopMs,
+    });
+    this.device.recordConnectionActivity?.({
+      type: 'live.conflict',
+      severity: 'warning',
+      summary:
+        'Live view was turned off for this session: it made Mirroir report iPhone Mirroring as paused. The screen is updated with Mirroir screenshots instead.',
+      detail: { probeMs: Date.now() - probe.startedAt, sinceHelperExitMs: sinceStopMs },
+    });
+    this.emitState();
+  }
+
+  /** Clears the latch (and a running probe). Returns true when the latch was set. */
+  private clearConflict(): boolean {
+    this.probe = null;
+    if (!this.conflict) return false;
+    this.conflict = false;
+    this.log.info('Live capture conflict latch cleared by a settings change; live capture may run again');
+    return true;
+  }
+
+  /** Ends a probe whose pause outlived the window: it was genuine, so the normal rules apply again. */
+  private checkProbeDeadline(now: number): void {
+    const probe = this.probe;
+    if (!probe || probe.helperExitedAt === null || now - probe.helperExitedAt < this.t.conflictProbeMs) return;
+    this.probe = null;
+    this.log.info('iPhone Mirroring stayed paused after live capture stopped; the pause is genuine, live capture may run again', {
+      probeMs: now - probe.startedAt,
+    });
+    this.evaluate();
   }
 
   private ensureRunning(): void {
@@ -764,6 +894,7 @@ export class LiveCapture extends EventEmitter {
     const healthy = session.firstFrameAt !== null && now - session.firstFrameAt >= HEALTHY_SESSION_MS;
     if (healthy) this.failures = 0;
     const stop = session.stopping;
+    if (stop === 'conflict-probe' && this.probe) this.probe.helperExitedAt = now;
     if (stop && !RETRY_REASONS.has(stop)) {
       // Asked to stop (not needed, turned off, shutting down).
       this.nextAttemptAt = 0;
@@ -942,9 +1073,10 @@ export class LiveCapture extends EventEmitter {
    * screenshots that differ, both taken after the last live frame and after
    * a stall-length silence, mean the screen is changing but the helper's
    * stream is not delivering — it is restarted (with backoff). A silent helper
-   * on an unchanging screen is left alone: ScreenCaptureKit normally delivers
-   * frames only when the window content changes, so silence alone is not a
-   * failure (restarting on it would also flicker the macOS recording indicator).
+   * on an unchanging screen is left alone: the helper does not re-send an
+   * unchanged screenshot (it repeats the last frame about once per second
+   * instead), so a pause in new frames alone is not a failure (restarting on
+   * it would also flicker the macOS recording indicator).
    */
   notePolledFrame(frame: PolledFrameInfo): void {
     const previous = this.lastPolled;
@@ -974,6 +1106,7 @@ export class LiveCapture extends EventEmitter {
         if (now - since >= this.t.stallMs) this.stopHelper(session, 'stall');
       }
     }
+    this.checkProbeDeadline(now);
     this.updateDelivering(now);
   }
 

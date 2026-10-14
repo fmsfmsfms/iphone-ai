@@ -5,10 +5,11 @@ import { afterEach, describe, expect, it } from 'vitest';
 
 import type { ActionResult, DeviceAction, PolicyDecision, ServerEvent } from '@iphone-ai/shared';
 
-import { DeviceError, type ActionContext } from '../../src/device/device-controller.js';
+import type { Logger } from '../../src/core/logger.js';
+import { DeviceController, DeviceError, type ActionContext } from '../../src/device/device-controller.js';
 import { pngDimensions } from '../../src/device/png.js';
 import { parseHealth } from '../../src/mcp/parsers.js';
-import { createDeviceContext, waitFor, type DeviceContext, type DeviceOptions } from '../helpers/context.js';
+import { createDeviceContext, MOCK_PERMISSIONS, waitFor, type DeviceContext, type DeviceOptions } from '../helpers/context.js';
 
 const ALLOW: PolicyDecision = { verdict: 'allow', risk: 'low', reasons: [], rules: [] };
 const NEEDS_APPROVAL: PolicyDecision = { verdict: 'require_approval', risk: 'high', reasons: ['"Send" matches "send"'], rules: ['sensitive.messaging'] };
@@ -171,7 +172,8 @@ describe('geometry and state checks', () => {
     c.writeMockState({ mirroring: 'paused' });
     const paused = await rejection(c.device.perform(TAP_SETTINGS, user()));
     expect(paused.code).toBe('paused');
-    expect(paused.message).toMatch(/paused/);
+    // iPhone Mirroring needs the iPhone locked: never tell the user to unlock it.
+    expect(paused.message).toBe('iPhone Mirroring is paused. Lock your iPhone and keep it nearby, then click Resume and try again.');
     expect((await rejection(c.device.perform({ kind: 'press_home' }, user()))).code).toBe('paused');
     expect(c.device.getStatus().mirroring.state).toBe('paused');
 
@@ -442,6 +444,38 @@ describe('status monitoring and diagnostics', () => {
     const types = c.activity.query({ categories: ['connection'] }).map((e) => e.type);
     expect(types).toEqual(expect.arrayContaining(['mirroring.connected', 'mirroring.paused', 'permissions.checked']));
     await waitFor(() => c.events.some((e) => e.type === 'status' && e.status.mirroring.state === 'paused'));
+  });
+
+  it('logs every mirroring state transition to the backend log (activity rows unchanged)', async () => {
+    ctx = await createDeviceContext();
+    const c = ctx;
+    const lines: { level: string; msg: string; data?: Record<string, unknown> }[] = [];
+    const log: Logger = {
+      debug: (msg, data) => lines.push({ level: 'debug', msg, data }),
+      info: (msg, data) => lines.push({ level: 'info', msg, data }),
+      warn: (msg, data) => lines.push({ level: 'warn', msg, data }),
+      error: (msg, data) => lines.push({ level: 'error', msg, data }),
+      child: () => log,
+      setLevel: () => undefined,
+    };
+    const device = new DeviceController(c.mirroir, c.settings, c.hub, c.activity, log, MOCK_PERMISSIONS);
+    await device.refreshStatus();
+    c.writeMockState({ mirroring: 'paused' });
+    await device.refreshStatus();
+    await device.refreshStatus();
+    c.writeMockState({ mirroring: 'connected' });
+    await device.refreshStatus();
+
+    expect(lines.filter((l) => l.msg === 'Mirroring state changed')).toEqual([
+      { level: 'info', msg: 'Mirroring state changed', data: { from: 'unknown', to: 'connected' } },
+      { level: 'info', msg: 'Mirroring state changed', data: { from: 'connected', to: 'paused' } },
+      { level: 'info', msg: 'Mirroring state changed', data: { from: 'paused', to: 'connected' } },
+    ]);
+    const types = c.activity.query({ categories: ['connection'] }).map((e) => e.type);
+    expect(types.filter((t) => t.startsWith('mirroring.')).sort()).toEqual(['mirroring.connected', 'mirroring.connected', 'mirroring.paused']);
+    // iPhone Mirroring needs the iPhone locked: the guidance never says to unlock it.
+    const paused = c.activity.query({ categories: ['connection'] }).find((e) => e.type === 'mirroring.paused');
+    expect(paused?.summary).toBe('iPhone Mirroring is paused — lock the iPhone, keep it nearby and click Resume.');
   });
 
   it('resets the mirroring state to unknown when Mirroir crashes', async () => {
