@@ -149,6 +149,11 @@ export function providerReadiness(settings: AppSettings | null, providerId?: str
   }
 }
 
+/** Whether the provider sends data off this Mac and the user hasn't acknowledged that yet. */
+export function needsCloudDisclosure(settings: AppSettings | null, provider: ProviderConfig | null): boolean {
+  return Boolean(settings && provider?.cloud && !settings.privacy.cloudDisclosureAcknowledged);
+}
+
 export interface ComposerContext {
   settings: AppSettings | null;
   session: SessionInfo | null;

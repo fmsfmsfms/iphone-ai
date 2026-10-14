@@ -37,6 +37,7 @@ registerMessages('live', {
     'manual.confirm.button': 'Turn on',
     'manual.error': 'Couldn’t change manual control',
     'manual.shortcut': 'Toggle manual control',
+    'manual.localOnly': 'Manual control can only be turned on from the Mac.',
 
     'nav.title': 'Navigation',
     'nav.home': 'Home',
@@ -133,6 +134,7 @@ registerMessages('live', {
     'manual.confirm.button': 'تفعيل',
     'manual.error': 'تعذّر تغيير التحكم اليدوي',
     'manual.shortcut': 'تبديل التحكم اليدوي',
+    'manual.localOnly': 'لا يمكن تفعيل التحكم اليدوي إلا من جهاز الـ Mac.',
 
     'nav.title': 'التنقل',
     'nav.home': 'الرئيسية',

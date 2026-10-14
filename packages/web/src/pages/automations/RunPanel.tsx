@@ -15,7 +15,7 @@ import { StatusChip } from '../../components/StatusChip';
 import { api, errorMessage } from '../../lib/api';
 import { useI18n } from '../../lib/i18n';
 import { navigate } from '../../lib/router';
-import { notifyError, shallowEqual, upsertRun, useActiveRun, useActiveTask, useAppStore, useCanControl } from '../../state/store';
+import { appStore, notifyError, shallowEqual, upsertRun, useActiveRun, useActiveTask, useAppStore, useCanControl } from '../../state/store';
 import { ModeNotice } from './ModeNotice';
 import { RunView } from './RunView';
 import {
@@ -65,7 +65,15 @@ export function RunPanel({ workflow, dirty, onRunFinished }: RunPanelProps) {
     setLoading(true);
     setError(null);
     try {
-      setFetched((await api.workflows.runs(workflow.id)).slice(0, HISTORY_LIMIT));
+      const list = (await api.workflows.runs(workflow.id)).slice(0, HISTORY_LIMIT);
+      setFetched(list);
+      // Correct store copies still shown as live although the server says they finished
+      // (their last events were missed); this also fires the "run finished" refresh below.
+      const stored = appStore.getState().workflowRuns;
+      for (const run of list) {
+        const copy = stored[run.id];
+        if (copy && isRunLive(copy) && !isRunLive(run)) upsertRun(run);
+      }
     } catch (err) {
       setError(errorMessage(err));
     } finally {

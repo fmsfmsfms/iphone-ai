@@ -1,6 +1,7 @@
 // Right panel of Live Control: a compact chat for the most recent
-// conversation (created when none exists), with pending approvals and the
-// current task's progress and latest steps.
+// conversation (created when none exists), with pending approvals, the
+// current task's progress and latest steps, and the cloud privacy notice that
+// gates the composer like on the AI Assistant page.
 
 import { ArrowUpRightFromSquare, CirclePlus, Sparkles, TriangleExclamation } from '@gravity-ui/icons';
 import { TERMINAL_TASK_STATUSES, type AgentTask, type Conversation } from '@iphone-ai/shared';
@@ -10,6 +11,7 @@ import { useCallback, useEffect, useState } from 'react';
 import {
   ApprovalCard,
   ChatThread,
+  CloudDisclosureNotice,
   Composer,
   StepTimeline,
   TaskProgress,
@@ -193,6 +195,7 @@ export function AssistantPanel() {
             }
           />
           <div className="border-t border-hairline p-3">
+            <CloudDisclosureNotice compact className="mb-3" />
             <Composer compact onSend={send} disabledReason={disabledReason} placeholder={t('live.assistant.placeholder')} />
           </div>
         </>

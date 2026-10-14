@@ -36,9 +36,13 @@ export interface BootstrapResponse {
   version: string;
 }
 
+/** Which backend listener served the page: the Mac-only one or the opt-in remote one. */
+export type ListenerKind = 'local' | 'remote';
+
 export interface HealthResponse {
   ok: true;
   version: string;
+  listener: ListenerKind;
 }
 
 export interface HealthCheckResponse {

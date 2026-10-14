@@ -1,6 +1,7 @@
 // Active AI provider + model for the conversation header. Switching calls
 // PUT /api/providers/active and takes effect for the next instruction (no
-// restart). Each provider shows vision/text-only and cloud/local badges.
+// restart); only the Mac may switch. Each provider shows vision/text-only and
+// cloud/local badges.
 
 import { Check, ChevronDown, Cloud, Cpu, Eye, Gear, Sparkles, Text } from '@gravity-ui/icons';
 import type { ProviderConfig } from '@iphone-ai/shared';
@@ -11,7 +12,7 @@ import { StatusChip } from '../../components/StatusChip';
 import { providerReadiness } from '../../lib/device-state';
 import { useI18n } from '../../lib/i18n';
 import { navigate } from '../../lib/router';
-import { notifyError, setActiveProvider, useAppStore, useCanControl } from '../../state/store';
+import { notifyError, setActiveProvider, useAppStore, useCanControl, useIsLocal } from '../../state/store';
 
 const MANAGE_KEY = '__manage';
 
@@ -43,6 +44,7 @@ export function ProviderPicker() {
   const { t } = useI18n();
   const settings = useAppStore((s) => s.settings);
   const canControl = useCanControl();
+  const isLocal = useIsLocal();
   const busy = useAppStore((s) => s.activeTaskId !== null);
   const [switching, setSwitching] = useState(false);
   if (!settings) return null;
@@ -88,11 +90,14 @@ export function ProviderPicker() {
         <Dropdown.Popover placement="bottom start" className="w-[24rem] max-w-[calc(100vw-2rem)]">
           <div className="px-3 pt-2.5 pb-1">
             <p className="text-[11px] font-semibold tracking-wide text-muted uppercase">{t('assistant.provider.title')}</p>
-            <p className="mt-0.5 text-[11px] leading-relaxed text-muted">{busy ? t('assistant.provider.nextTask') : t('assistant.provider.hint')}</p>
+            <p className="mt-0.5 text-[11px] leading-relaxed text-muted">
+              {!isLocal ? t('provider.localOnly') : busy ? t('assistant.provider.nextTask') : t('assistant.provider.hint')}
+            </p>
           </div>
           {providers.length === 0 ? <p className="px-3 py-2 text-xs text-muted">{t('provider.noneEnabled')}</p> : null}
           <Dropdown.Menu
             aria-label={t('assistant.provider.title')}
+            disabledKeys={isLocal ? [] : providers.map((p) => p.id)}
             onAction={(key) => {
               if (key === MANAGE_KEY) navigate({ name: 'settings', section: 'ai' });
               else void choose(String(key));

@@ -53,6 +53,8 @@ describe('remote listener', () => {
     expect(wrong.statusCode).toBe(421);
     const ok = await remote.app.inject({ method: 'GET', url: '/api/health', headers: { host: REMOTE_HOST } });
     expect(ok.statusCode).toBe(200);
+    // The UI uses this to show the passcode sign-in instead of "reopen from the app".
+    expect(ok.json()).toEqual({ ok: true, version: '0.1.0-test', listener: 'remote' });
     const desktop = await remote.app.inject({ method: 'GET', url: '/auth/desktop?token=x', headers: { host: REMOTE_HOST } });
     expect(desktop.statusCode).toBe(404);
   });

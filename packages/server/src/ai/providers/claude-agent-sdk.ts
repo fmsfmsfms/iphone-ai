@@ -22,7 +22,7 @@ import {
   type SDKMessage,
   type SDKUserMessage,
 } from '@anthropic-ai/claude-agent-sdk';
-import type { ProviderConfig, ProviderTestResult } from '@iphone-ai/shared';
+import { APP_VERSION, type ProviderConfig, type ProviderTestResult } from '@iphone-ai/shared';
 import type { ZodRawShape } from 'zod';
 
 import { ProviderError, type LoopProvider, type LoopRequest, type ModelContent } from '../types.js';
@@ -62,7 +62,7 @@ function cliEnv(apiKey: string | null): Record<string, string> {
     LOGNAME: process.env.LOGNAME ?? process.env.USER ?? '',
     TMPDIR: process.env.TMPDIR ?? '/tmp',
     LANG: process.env.LANG ?? 'en_US.UTF-8',
-    CLAUDE_AGENT_SDK_CLIENT_APP: 'iphone-ai/0.1.0',
+    CLAUDE_AGENT_SDK_CLIENT_APP: `iphone-ai/${APP_VERSION}`,
     DISABLE_AUTOUPDATER: '1',
   };
   if (apiKey) env.ANTHROPIC_API_KEY = apiKey;

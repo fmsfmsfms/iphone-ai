@@ -6,8 +6,9 @@ import type { ApprovalRequest } from '@iphone-ai/shared';
 import { Button, Input, Label, TextField } from '@heroui/react';
 import { useState } from 'react';
 
+import { ApiError } from '../../lib/api';
 import { useI18n } from '../../lib/i18n';
-import { decideApproval, notifyError, useCanControl } from '../../state/store';
+import { decideApproval, notify, notifyError, useCanControl } from '../../state/store';
 import { useNow } from '../RelativeTime';
 import { StatusChip } from '../StatusChip';
 import { formatArgs, RISK_KEY, RISK_TONE } from './task-ui';
@@ -48,7 +49,9 @@ export function ApprovalCard({ approval, compact, className }: ApprovalCardProps
     try {
       await decideApproval(approval.id, decision, note.trim() || undefined);
     } catch (err) {
-      notifyError(t('approval.error'), err);
+      // Already answered elsewhere, expired or cancelled: the card is gone, nothing failed.
+      if (err instanceof ApiError && err.code === 'approval_not_pending') notify('info', t('approval.alreadyDecided'));
+      else notifyError(t('approval.error'), err);
     } finally {
       setPending(null);
     }

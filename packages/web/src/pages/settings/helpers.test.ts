@@ -48,8 +48,10 @@ describe('draft diffing', () => {
 
   it('returns only changed top-level keys, honouring ignored ones', () => {
     const base = createDefaultSettings().connection;
-    const draft = { ...base, requestTimeoutMs: 30000, screenshot: { ...base.screenshot, activeFps: 4 } };
-    expect(diffSection(base, draft)).toEqual({ requestTimeoutMs: 30000, screenshot: { ...base.screenshot, activeFps: 4 } });
+    // Relative to the default so the test keeps working when defaults change.
+    const timeout = base.requestTimeoutMs + 15_000;
+    const draft = { ...base, requestTimeoutMs: timeout, screenshot: { ...base.screenshot, activeFps: base.screenshot.activeFps + 1 } };
+    expect(diffSection(base, draft)).toEqual({ requestTimeoutMs: timeout, screenshot: { ...base.screenshot, activeFps: base.screenshot.activeFps + 1 } });
     expect(diffSection(base, { ...base })).toEqual({});
     const perms = createDefaultSettings().permissions;
     expect(diffSection(perms, { ...perms, controlMode: 'supervised' }, ['controlMode'])).toEqual({});

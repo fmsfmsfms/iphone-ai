@@ -1,4 +1,5 @@
 // Active AI provider + model, with a popover to switch between the enabled ones.
+// Switching is reserved for the Mac (the backend refuses it from remote devices).
 
 import { Check, ChevronDown, Cloud, Cpu, Gear, Sparkles } from '@gravity-ui/icons';
 import { Button, Popover } from '@heroui/react';
@@ -7,12 +8,13 @@ import { useState } from 'react';
 import { providerReadiness } from '../lib/device-state';
 import { useI18n } from '../lib/i18n';
 import { navigate } from '../lib/router';
-import { notifyError, setActiveProvider, useAppStore, useCanControl } from '../state/store';
+import { notifyError, setActiveProvider, useAppStore, useCanControl, useIsLocal } from '../state/store';
 
 export function ProviderSwitcher() {
   const { t } = useI18n();
   const settings = useAppStore((s) => s.settings);
   const canControl = useCanControl();
+  const isLocal = useIsLocal();
   const [open, setOpen] = useState(false);
   const [switching, setSwitching] = useState<string | null>(null);
   if (!settings) return null;
@@ -47,7 +49,8 @@ export function ProviderSwitcher() {
         <span aria-hidden className="ai-gradient-bg flex size-6 shrink-0 items-center justify-center rounded-full text-white [&>svg]:size-3.5">
           <Sparkles />
         </span>
-        <span className="hidden min-w-0 flex-col items-start leading-none md:flex">
+        {/* The label only shows on wide windows: the top bar's controls never shrink (STOP must stay visible). */}
+        <span className="hidden min-w-0 flex-col items-start leading-none xl:flex">
           <span className="max-w-40 truncate text-[13px] font-semibold text-foreground">{active.provider?.label ?? t('provider.none')}</span>
           <span className={['max-w-40 truncate text-[11px]', active.configured ? 'text-muted' : 'text-warning'].join(' ')}>
             {active.configured ? active.provider?.model || t('provider.defaultModel') : t(active.reasonKey ?? 'provider.reason.none')}
@@ -71,7 +74,7 @@ export function ProviderSwitcher() {
                     type="button"
                     role="menuitemradio"
                     aria-checked={selected}
-                    disabled={!canControl || switching !== null}
+                    disabled={!canControl || !isLocal || switching !== null}
                     onClick={() => void choose(p.id)}
                     className={[
                       'app-transition flex w-full items-start gap-3 rounded-xl p-2.5 text-start outline-none',
@@ -101,6 +104,8 @@ export function ProviderSwitcher() {
               })}
             </div>
           )}
+          {canControl && !isLocal ? <p className="px-2.5 pt-2 text-[11px] text-muted">{t('provider.localOnly')}</p> : null}
+          {!canControl ? <p className="px-2.5 pt-2 text-[11px] text-muted">{t('input.reason.viewOnly')}</p> : null}
           <div className="mt-1 border-t border-hairline px-1 pt-2">
             <Button
               size="sm"

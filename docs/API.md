@@ -24,10 +24,10 @@ Errors are JSON: `{ "error": { "code": string, "message": string } }` with an HT
 ### Auth & bootstrap
 | Method | Path | Body | Response |
 |---|---|---|---|
-| GET | `/api/health` | — | `{ ok: true, version }` (no auth) |
+| GET | `/api/health` | — | `{ ok: true, version, listener: 'local' \| 'remote' }` (no auth; `listener` names the listener that answered, so the UI can offer the passcode sign-in on the remote one before it has a session) |
 | GET | `/auth/desktop?token=` | — | 302 → `/` + cookie |
 | GET | `/auth/local?code=` | — | 302 → `/` + cookie |
-| POST | `/api/auth/remote-login` | `{ passcode, deviceName? }` | `{ ok: true }` + cookie (remote listener only) |
+| POST | `/api/auth/remote-login` | `{ passcode, deviceName? }` | `{ ok: true }` + cookie (remote listener only; errors: 401 `invalid_passcode`, 403 `remote_not_configured`, 429 `rate_limited` with a `Retry-After` header in seconds) |
 | POST | `/api/auth/logout` | — | 204 |
 | GET | `/api/auth/session` | — | `{ id, kind, canControl, remote }` |
 | POST | `/api/auth/browser-link` | `{ open?: boolean }` | `{ url }` (desktop session only) |

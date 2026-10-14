@@ -40,6 +40,20 @@ describe('ApprovalCard', () => {
     await waitFor(() => expect(appStore.getState().approvals).toHaveLength(0));
   });
 
+  it('drops a card the server no longer holds, with an info note instead of an error', async () => {
+    const approval = makeApproval();
+    vi.stubGlobal(
+      'fetch',
+      vi.fn<typeof fetch>().mockResolvedValue(jsonResponse(404, { error: { code: 'approval_not_pending', message: 'This approval is no longer pending.' } })),
+    );
+    act(() => dispatchServerEvent({ type: 'approval_requested', approval }));
+    render(<ApprovalCard approval={approval} />);
+    await userEvent.click(screen.getByRole('button', { name: /approve/i }));
+    await waitFor(() => expect(appStore.getState().approvals).toHaveLength(0));
+    const last = appStore.getState().toasts.at(-1);
+    expect(last).toMatchObject({ level: 'info', title: 'This request was already answered elsewhere, or it expired.' });
+  });
+
   it('shows expired requests without decision buttons', () => {
     render(<ApprovalCard approval={makeApproval({ expiresAt: Date.now() - 1000 })} />);
     expect(screen.getByText('Expired')).toBeInTheDocument();

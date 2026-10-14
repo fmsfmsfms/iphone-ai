@@ -114,15 +114,18 @@ export function RunView({ run, workflow, retryBlockedReason, onRetried, classNam
 
       {run.retryOf ? <p className="text-[11px] text-muted">{t('automations.run.retryOf')}</p> : null}
 
-      {canControl && (live || retry.whole) ? (
+      {/* Pause and Stop only reduce what runs, so every session gets them; Resume and Retry need control. */}
+      {live || (canControl && retry.whole) ? (
         <div className="flex flex-wrap items-center gap-2">
           {live ? (
             <>
               {run.status === 'paused' ? (
-                <Button size="sm" variant="secondary" isPending={pending === 'resume'} isDisabled={pending !== null} onPress={() => void act('resume')}>
-                  <CirclePlay className="size-3.5" />
-                  {t('automations.run.resume')}
-                </Button>
+                canControl ? (
+                  <Button size="sm" variant="secondary" isPending={pending === 'resume'} isDisabled={pending !== null} onPress={() => void act('resume')}>
+                    <CirclePlay className="size-3.5" />
+                    {t('automations.run.resume')}
+                  </Button>
+                ) : null
               ) : (
                 <Button size="sm" variant="secondary" isPending={pending === 'pause'} isDisabled={pending !== null} onPress={() => void act('pause')}>
                   <CirclePause className="size-3.5" />
@@ -133,6 +136,9 @@ export function RunView({ run, workflow, retryBlockedReason, onRetried, classNam
                 <CircleStop className="size-3.5" />
                 {t('automations.run.stop')}
               </Button>
+              {run.status === 'paused' && !canControl ? (
+                <span className="text-[11px] text-muted">{t('automations.run.reason.viewOnly')}</span>
+              ) : null}
             </>
           ) : (
             <>

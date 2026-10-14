@@ -54,7 +54,10 @@ function timestampForFile(at = new Date()): string {
 export function registerSystemRoutes(app: FastifyInstance, deps: RouteDeps): void {
   const { ctx, auth } = deps;
 
-  app.get('/api/health', async () => ({ ok: true, version: ctx.version }));
+  // `listener` lets the UI tell the Mac-only listener from the remote one before
+  // it has a session (the remote one shows a passcode sign-in instead of
+  // "reopen from the app").
+  app.get('/api/health', async () => ({ ok: true, version: ctx.version, listener: deps.listener }));
 
   app.get('/api/bootstrap', async (request) => {
     const session = requireSession(request);

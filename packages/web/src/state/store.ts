@@ -24,7 +24,15 @@ import {
   type WorkflowRunStatus,
 } from '@iphone-ai/shared';
 
-import { api, ApiError, errorMessage, setUnauthorizedHandler, type BootstrapResponse, type SessionInfo } from '../lib/api';
+import {
+  api,
+  ApiError,
+  errorMessage,
+  setUnauthorizedHandler,
+  type BootstrapResponse,
+  type ListenerKind,
+  type SessionInfo,
+} from '../lib/api';
 
 // ---------------------------------------------------------------------------
 // State shape
@@ -81,6 +89,8 @@ export interface UiState {
   focusStealToastShown: boolean;
   /** Last lastFocusSteal timestamp the user has been told about. */
   focusStealAcknowledgedAt: number | null;
+  /** Live Control's assistant pane (which lists every pending approval) is collapsed. */
+  liveAssistantCollapsed: boolean;
 }
 
 export interface StoreState {
@@ -89,6 +99,11 @@ export interface StoreState {
   connection: ConnectionState;
   hello: HelloInfo | null;
   session: SessionInfo | null;
+  /**
+   * Which listener served this page (null until known). The remote listener
+   * gets a passcode sign-in instead of "reopen from the iPhone AI app".
+   */
+  listenerKind: ListenerKind | null;
   version: string | null;
   status: DeviceStatus | null;
   settings: AppSettings | null;
@@ -128,6 +143,7 @@ export function createInitialState(): StoreState {
     connection: { socket: 'idle', attempts: 0, lastOpenAt: null, lastCloseAt: null, nextRetryAt: null, downSince: null },
     hello: null,
     session: null,
+    listenerKind: null,
     version: null,
     status: null,
     settings: null,
@@ -146,7 +162,7 @@ export function createInitialState(): StoreState {
     activity: [],
     toasts: [],
     stop: { latched: false, reason: null, at: null },
-    ui: { viewers: 0, focusStealToastShown: false, focusStealAcknowledgedAt: null },
+    ui: { viewers: 0, focusStealToastShown: false, focusStealAcknowledgedAt: null, liveAssistantCollapsed: false },
   };
 }
 
@@ -331,8 +347,19 @@ export function reduceServerEvent(state: StoreState, event: ServerEvent): Partia
     }
     case 'workflow_run':
       return withRun(state, event.run);
-    case 'settings':
+    case 'settings': {
+      // Fail-safe: a remote session loses control the moment the Mac turns remote
+      // control off. Never grants control here; granting comes from the server (hello/bootstrap).
+      const remote = state.session?.remote ?? state.hello?.remote ?? false;
+      if (remote && !event.settings.remote.allowRemoteControl && (state.session?.canControl || state.hello?.canControl)) {
+        return {
+          settings: event.settings,
+          session: state.session ? { ...state.session, canControl: false } : state.session,
+          hello: state.hello ? { ...state.hello, canControl: false } : state.hello,
+        };
+      }
       return { settings: event.settings };
+    }
     case 'stop_engaged':
       return {
         stop: { latched: true, reason: event.reason, at: event.at },
@@ -361,10 +388,14 @@ export function reduceBootstrap(state: StoreState, data: BootstrapResponse): Par
     boot: 'ready',
     bootError: null,
     session: data.session,
+    listenerKind: data.session.remote ? 'remote' : 'local',
     version: data.version,
     settings: data.settings,
     stream: data.stream,
-    approvals: [...data.pendingApprovals].filter((a) => a.status === 'pending').sort((a, b) => a.createdAt - b.createdAt),
+    // A snapshot taken before an approval_resolved event must not bring that card back.
+    approvals: data.pendingApprovals
+      .filter((a) => a.status === 'pending' && !state.recentApprovals.some((r) => r.id === a.id))
+      .sort((a, b) => a.createdAt - b.createdAt),
     ...withStatus(state, data.status),
   };
   const merged = { ...state, ...next };
@@ -372,6 +403,7 @@ export function reduceBootstrap(state: StoreState, data: BootstrapResponse): Par
     next = { ...next, ...withTask(merged, data.activeTask) };
   } else if (state.activeTaskId) {
     // The server says nothing is running; keep the task record but clear the active marker.
+    // bootstrap() refetches records that were live so they don't keep showing "Running".
     next = { ...next, activeTaskId: null };
   }
   if (data.activeRun) {
@@ -477,6 +509,23 @@ export function useCanControl(): boolean {
   return useAppStore((s) => s.session?.canControl ?? s.hello?.canControl ?? false);
 }
 
+/** True for the desktop app and local browsers; false for remote devices (the backend reserves some actions for the Mac). */
+export function useIsLocal(): boolean {
+  return useAppStore((s) => !(s.session?.remote ?? s.hello?.remote ?? false));
+}
+
+/** Best guess before /api/health answers: the local listener only binds 127.0.0.1 (and Vite dev uses localhost). */
+export function guessListenerKind(hostname: string): ListenerKind {
+  const host = hostname.trim().toLowerCase();
+  return host === '127.0.0.1' || host === 'localhost' || host === '[::1]' || host === '::1' ? 'local' : 'remote';
+}
+
+/** Which listener served this page, falling back to the host-name guess until it is known. */
+export function useListenerKind(): ListenerKind {
+  const known = useAppStore((s) => s.listenerKind);
+  return known ?? guessListenerKind(window.location.hostname);
+}
+
 // ---------------------------------------------------------------------------
 // Actions
 // ---------------------------------------------------------------------------
@@ -484,7 +533,18 @@ export function useCanControl(): boolean {
 const set = appStore.setState;
 
 export function dispatchServerEvent(event: ServerEvent): void {
+  const before = appStore.getState();
   set((state) => reduceServerEvent(state, event));
+  if (
+    event.type === 'settings' &&
+    (before.session?.remote ?? before.hello?.remote) &&
+    before.settings &&
+    before.settings.remote.allowRemoteControl !== event.settings.remote.allowRemoteControl
+  ) {
+    // Remote control was turned off or on at the Mac: reload this session's
+    // effective rights from the server (the reducer only ever removes them).
+    void bootstrap();
+  }
 }
 
 /** Records a UI notification; ToastBridge shows it with HeroUI's toast(). */
@@ -496,9 +556,41 @@ export function notify(level: ToastLevel, title: string, message?: string): void
 /** Shows an error toast for any thrown value (ApiError messages come from the backend). */
 export function notifyError(title: string, err: unknown): void {
   notify('error', title, errorMessage(err));
+  // The server says this session can't control (e.g. remote control was turned off
+  // on the Mac): reload the authoritative session so the UI stops offering controls.
+  if (err instanceof ApiError && err.code === 'view_only') void bootstrap();
 }
 
 let bootstrapInFlight: Promise<boolean> | null = null;
+
+/**
+ * Records that may be stale after the socket was down: live runs and tasks the
+ * server no longer reports as active (they ended while events weren't
+ * arriving) and conversations with an unfinished streaming reply.
+ */
+export function staleAfterBootstrap(state: StoreState, data: BootstrapResponse): { runIds: string[]; taskIds: string[]; conversationIds: string[] } {
+  const runIds = Object.values(state.workflowRuns)
+    .filter((r) => ACTIVE_RUN_STATUSES.includes(r.status) && r.id !== data.activeRun?.id)
+    .map((r) => r.id);
+  const taskIds = Object.values(state.tasks)
+    .filter((t) => !isTerminalTask(t) && t.id !== data.activeTask?.id)
+    .map((t) => t.id);
+  // Their conversations may have missed the final reply (or the whole reply) too.
+  const conversationIds = [
+    ...new Set([
+      ...Object.values(state.streaming).map((m) => m.conversationId),
+      ...taskIds.map((id) => state.tasks[id]!.conversationId),
+    ]),
+  ];
+  return { runIds, taskIds, conversationIds };
+}
+
+/** Best-effort refresh of records that may have changed while events weren't arriving. */
+function refreshStale(stale: ReturnType<typeof staleAfterBootstrap>): void {
+  for (const id of stale.runIds) void api.workflowRuns.get(id).then(upsertRun, () => undefined);
+  for (const id of stale.taskIds) void loadTask(id).catch(() => undefined); // also refreshes its steps
+  for (const id of stale.conversationIds) void loadConversation(id).catch(() => undefined);
+}
 
 /** Loads GET /api/bootstrap. Returns true on success. */
 export function bootstrap(): Promise<boolean> {
@@ -506,12 +598,16 @@ export function bootstrap(): Promise<boolean> {
   bootstrapInFlight = (async () => {
     try {
       const data = await api.bootstrap();
+      const stale = staleAfterBootstrap(appStore.getState(), data);
       set((state) => reduceBootstrap(state, data));
+      refreshStale(stale);
       return true;
     } catch (err) {
       if (err instanceof ApiError) {
-        if (err.status === 401) set({ boot: 'unauthorized', bootError: err.message });
-        else if (err.isUnreachable) {
+        if (err.status === 401) {
+          set({ boot: 'unauthorized', bootError: err.message });
+          void detectListener();
+        } else if (err.isUnreachable) {
           if (appStore.getState().boot === 'loading') set({ boot: 'unreachable', bootError: err.message });
         } else if (appStore.getState().boot === 'loading') {
           set({ boot: 'unreachable', bootError: err.message });
@@ -529,7 +625,33 @@ export function bootstrap(): Promise<boolean> {
 
 setUnauthorizedHandler(() => {
   set({ boot: 'unauthorized', bootError: null });
+  void detectListener();
 });
+
+let listenerProbe: Promise<ListenerKind | null> | null = null;
+
+/**
+ * Asks the public GET /api/health which listener served this page (cached once
+ * known). Resolves to null when the probe fails; callers then use the host-name guess.
+ */
+export function detectListener(): Promise<ListenerKind | null> {
+  const known = appStore.getState().listenerKind;
+  if (known) return Promise.resolve(known);
+  if (listenerProbe) return listenerProbe;
+  listenerProbe = (async () => {
+    try {
+      const health = await api.health({ quiet401: true });
+      const kind = health.listener === 'remote' || health.listener === 'local' ? health.listener : null;
+      if (kind) set({ listenerKind: kind });
+      return kind;
+    } catch {
+      return null;
+    } finally {
+      listenerProbe = null;
+    }
+  })();
+  return listenerProbe;
+}
 
 export function setConnection(patch: Partial<ConnectionState>): void {
   set((state) => ({ connection: { ...state.connection, ...patch } }));
@@ -569,14 +691,47 @@ export function upsertMessages(conversationId: string, messages: ChatMessage[]):
   });
 }
 
-/** Replaces a conversation's messages with the server's list (e.g. after clearing). */
-export function replaceMessages(conversationId: string, messages: ChatMessage[]): void {
-  set((state) => ({
-    messagesByConversation: {
-      ...state.messagesByConversation,
-      [conversationId]: [...messages].sort((a, b) => a.createdAt - b.createdAt),
-    },
-  }));
+/**
+ * Streaming entries of one conversation that the server's message list shows
+ * are finished (or gone). `fetchedAt` protects deltas that arrived after the
+ * list was requested for a message the list could not contain yet.
+ */
+export function finishedStreaming(
+  streaming: StoreState['streaming'],
+  conversationId: string,
+  messages: readonly ChatMessage[],
+  fetchedAt: number,
+): string[] {
+  const byId = new Map(messages.map((m) => [m.id, m]));
+  const done: string[] = [];
+  for (const entry of Object.values(streaming)) {
+    if (entry.conversationId !== conversationId) continue;
+    const message = byId.get(entry.messageId);
+    if (message ? !message.streaming : entry.updatedAt < fetchedAt) done.push(entry.messageId);
+  }
+  return done;
+}
+
+/**
+ * Replaces a conversation's messages with the server's list (e.g. after
+ * clearing or a reconnect) and drops "typing…" state for replies it shows as finished.
+ */
+export function replaceMessages(conversationId: string, messages: ChatMessage[], fetchedAt = Date.now()): void {
+  set((state) => {
+    const done = finishedStreaming(state.streaming, conversationId, messages, fetchedAt);
+    let streaming = state.streaming;
+    if (done.length > 0) {
+      streaming = { ...state.streaming };
+      for (const id of done) delete streaming[id];
+    }
+    return {
+      messagesByConversation: {
+        ...state.messagesByConversation,
+        [conversationId]: [...messages].sort((a, b) => a.createdAt - b.createdAt),
+      },
+      streaming,
+    };
+  });
 }
 
 export function upsertRun(run: WorkflowRun): void {
@@ -666,9 +821,17 @@ export async function captureScreen(options: { resume?: boolean; settleMs?: numb
 // --- AI tasks & approvals --------------------------------------------------
 
 export async function decideApproval(id: string, decision: 'approved' | 'rejected', note?: string): Promise<ApprovalRequest> {
-  const approval = await api.approvals.decide(id, decision, note);
-  upsertApproval(approval);
-  return approval;
+  try {
+    const approval = await api.approvals.decide(id, decision, note);
+    upsertApproval(approval);
+    return approval;
+  } catch (err) {
+    if (err instanceof ApiError && err.code === 'approval_not_pending') {
+      // The server no longer holds it (decided elsewhere, expired or cancelled): drop the card.
+      set((state) => ({ approvals: state.approvals.filter((a) => a.id !== id) }));
+    }
+    throw err;
+  }
 }
 
 export async function pauseTask(id: string): Promise<void> {
@@ -697,8 +860,9 @@ export async function loadTask(id: string): Promise<{ task: AgentTask; steps: Ag
 
 /** Loads a conversation's messages and tasks into the store. */
 export async function loadConversation(conversationId: string): Promise<void> {
+  const fetchedAt = Date.now();
   const [messages, tasks] = await Promise.all([api.conversations.messages(conversationId), api.conversations.tasks(conversationId)]);
-  replaceMessages(conversationId, messages);
+  replaceMessages(conversationId, messages, fetchedAt);
   set((state) => {
     const nextTasks = { ...state.tasks };
     let lastTaskId = state.lastTaskId;

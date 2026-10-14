@@ -17,7 +17,7 @@ import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { DEFAULT_PROVIDERS } from '@iphone-ai/shared';
+import { APP_VERSION, DEFAULT_PROVIDERS } from '@iphone-ai/shared';
 
 import { AgentService } from './ai/agent-service.js';
 import { ScreenshotStore } from './ai/screenshots.js';
@@ -38,7 +38,7 @@ import { ApprovalBroker } from './policy/approvals.js';
 import { RemoteAccessService } from './remote/remote-access.js';
 import { KeychainSecretStore, MemorySecretStore, providerSecretAccount } from './security/secrets.js';
 
-const VERSION = '0.1.0';
+const VERSION = APP_VERSION;
 
 function defaultWebDist(): string | null {
   if (process.env.IPHONE_AI_WEB_DIST) return process.env.IPHONE_AI_WEB_DIST;

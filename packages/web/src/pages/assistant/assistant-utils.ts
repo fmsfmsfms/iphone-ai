@@ -9,7 +9,6 @@ import type {
   ApprovalRequest,
   Conversation,
   DeviceStatus,
-  ProviderConfig,
 } from '@iphone-ai/shared';
 
 import type { SessionInfo } from '../../lib/api';
@@ -210,9 +209,7 @@ export interface SendContext {
 }
 
 /** Whether the selected provider sends data off this Mac and the user hasn't acknowledged that yet. */
-export function needsCloudDisclosure(settings: AppSettings | null, provider: ProviderConfig | null): boolean {
-  return Boolean(settings && provider?.cloud && !settings.privacy.cloudDisclosureAcknowledged);
-}
+export { needsCloudDisclosure } from '../../lib/device-state';
 
 /**
  * Why a new instruction can't be sent right now (null when it can). Extends

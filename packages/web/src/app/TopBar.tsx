@@ -151,12 +151,15 @@ export function TopBar() {
       className="app-glass relative z-20 flex h-14 shrink-0 items-center gap-3 border-b border-hairline px-4"
       aria-label={t('topbar.label')}
     >
-      <TargetIndicator />
-      <span aria-hidden className="hidden h-6 w-px bg-hairline md:block" />
-      <ConnectionChips />
-      <PermissionWarnings />
-      <ReconnectingChip />
-      <div className="ms-auto flex min-w-0 items-center gap-2">
+      {/* Status takes whatever room is left: on narrow windows it is clipped, never STOP. */}
+      <div className="flex min-w-0 flex-1 items-center gap-3 self-stretch overflow-hidden">
+        <TargetIndicator />
+        <span aria-hidden className="hidden h-6 w-px bg-hairline md:block" />
+        <ConnectionChips />
+        <PermissionWarnings />
+        <ReconnectingChip />
+      </div>
+      <div className="flex shrink-0 items-center gap-2">
         <ManualIndicator />
         <ProviderSwitcher />
         <ControlModeSelector />

@@ -1,23 +1,26 @@
 // Manual-control switch logic shared by the device panel and the M shortcut:
-// enabling asks for confirmation, disabling applies immediately.
+// enabling asks for confirmation, disabling applies immediately. Only the Mac
+// may turn it on; a remote device may still turn it off.
 
 import { Hand } from '@gravity-ui/icons';
 import { useState } from 'react';
 
 import { ConfirmDialog } from '../../components/ConfirmDialog';
 import { useI18n } from '../../lib/i18n';
-import { notifyError, setManualControl, useAppStore, useCanControl } from '../../state/store';
+import { notifyError, setManualControl, useAppStore, useCanControl, useIsLocal } from '../../state/store';
 
 export function useManualControl() {
   const { t } = useI18n();
   const enabled = useAppStore((s) => s.settings?.permissions.manualControlEnabled ?? false);
   const canControl = useCanControl();
+  const isLocal = useIsLocal();
   const [confirming, setConfirming] = useState(false);
   const [pending, setPending] = useState(false);
 
   const request = (next: boolean) => {
     if (!canControl || pending) return;
     if (next && !enabled) {
+      if (!isLocal) return; // the backend refuses it from remote devices
       setConfirming(true);
       return;
     }
@@ -44,5 +47,7 @@ export function useManualControl() {
     </ConfirmDialog>
   );
 
-  return { enabled, canControl, pending, request, toggle: () => request(!enabled), dialog };
+  /** Turning it on is refused here (view-only, or a remote device while it is off). */
+  const cannotTurnOn = !canControl || (!isLocal && !enabled);
+  return { enabled, canControl, isLocal, cannotTurnOn, pending, request, toggle: () => request(!enabled), dialog };
 }

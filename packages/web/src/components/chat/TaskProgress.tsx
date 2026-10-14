@@ -1,5 +1,7 @@
 // Status of one AI task: state, provider/model, action budget, current
-// activity, outcome — with pause / resume / cancel.
+// activity, outcome — with pause / resume / cancel. Pausing and cancelling
+// only reduce what the AI does, so every session (view-only too) gets them;
+// resuming needs a session that can control.
 
 import { CircleCheckFill, CirclePause, CirclePlay, CircleXmark, Sparkles, TriangleExclamation } from '@gravity-ui/icons';
 import { TERMINAL_TASK_STATUSES, type AgentTask } from '@iphone-ai/shared';
@@ -129,13 +131,15 @@ export function TaskProgress({ task, compact, className }: TaskProgressProps) {
         </p>
       ) : null}
 
-      {!terminal && canControl ? (
+      {!terminal ? (
         <div className="mt-3 flex flex-wrap items-center gap-2">
           {task.status === 'paused' ? (
-            <Button size="sm" variant="secondary" isPending={pending === 'resume'} onPress={() => void run('resume')}>
-              <CirclePlay className="size-3.5" />
-              {t('task.resume')}
-            </Button>
+            canControl ? (
+              <Button size="sm" variant="secondary" isPending={pending === 'resume'} onPress={() => void run('resume')}>
+                <CirclePlay className="size-3.5" />
+                {t('task.resume')}
+              </Button>
+            ) : null
           ) : (
             <Button size="sm" variant="secondary" isPending={pending === 'pause'} isDisabled={!running} onPress={() => void run('pause')}>
               <CirclePause className="size-3.5" />
@@ -146,6 +150,7 @@ export function TaskProgress({ task, compact, className }: TaskProgressProps) {
             <CircleXmark className="size-3.5" />
             {t('task.cancel')}
           </Button>
+          {task.status === 'paused' && !canControl ? <span className="text-[11px] text-muted">{t('input.reason.viewOnly')}</span> : null}
         </div>
       ) : null}
     </div>

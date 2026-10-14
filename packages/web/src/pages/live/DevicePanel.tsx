@@ -205,7 +205,7 @@ export function DevicePanel({ manual, typeFieldRef }: DevicePanelProps) {
           <Switch
             isSelected={manual.enabled}
             onChange={(next) => manual.request(next)}
-            isDisabled={!manual.canControl || manual.pending}
+            isDisabled={manual.cannotTurnOn || manual.pending}
             size="md"
           >
             <Switch.Content className="flex w-full items-center gap-3">
@@ -216,7 +216,13 @@ export function DevicePanel({ manual, typeFieldRef }: DevicePanelProps) {
               <KbdHint keys={['M']} />
             </Switch.Content>
             <Description className="mt-2 block text-xs leading-relaxed text-muted">
-              {!manual.canControl ? t('input.reason.viewOnly') : manual.enabled ? t('live.manual.on') : t('live.manual.off')}
+              {!manual.canControl
+                ? t('input.reason.viewOnly')
+                : manual.enabled
+                  ? t('live.manual.on')
+                  : !manual.isLocal
+                    ? t('live.manual.localOnly')
+                    : t('live.manual.off')}
             </Description>
           </Switch>
         </div>

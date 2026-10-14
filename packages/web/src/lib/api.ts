@@ -57,12 +57,15 @@ export type * from './api-types';
 export class ApiError extends Error {
   readonly status: number;
   readonly code: string;
+  /** Seconds from the `Retry-After` header (e.g. a rate-limited sign-in), when the server sent one. */
+  readonly retryAfterSec: number | null;
 
-  constructor(status: number, code: string, message: string) {
+  constructor(status: number, code: string, message: string, retryAfterSec: number | null = null) {
     super(message);
     this.name = 'ApiError';
     this.status = status;
     this.code = code;
+    this.retryAfterSec = retryAfterSec;
   }
 
   /** True when the backend could not be reached at all (or a proxy reported it down). */
@@ -102,6 +105,13 @@ function isErrorBody(value: unknown): value is { error: { code?: unknown; messag
   return typeof value === 'object' && value !== null && 'error' in value && typeof (value as { error: unknown }).error === 'object';
 }
 
+/** `Retry-After` in seconds (only the delta-seconds form; the backend never sends a date). */
+function retryAfterOf(res: Response): number | null {
+  const raw = res.headers.get('retry-after');
+  if (raw === null || !/^\s*\d+\s*$/.test(raw)) return null;
+  return Number.parseInt(raw, 10);
+}
+
 async function toApiError(res: Response): Promise<ApiError> {
   let body: unknown = null;
   const type = res.headers.get('content-type') ?? '';
@@ -115,7 +125,7 @@ async function toApiError(res: Response): Promise<ApiError> {
   if (isErrorBody(body) && body.error) {
     const code = typeof body.error.code === 'string' ? body.error.code : `http_${res.status}`;
     const message = typeof body.error.message === 'string' ? body.error.message : res.statusText || `HTTP ${res.status}`;
-    return new ApiError(res.status, code, message);
+    return new ApiError(res.status, code, message, retryAfterOf(res));
   }
   // A non-JSON 5xx means a proxy (or nothing) answered instead of the backend.
   if (res.status >= 500) return new ApiError(res.status, 'bad_gateway', res.statusText || `HTTP ${res.status}`);

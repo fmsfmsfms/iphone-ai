@@ -7,6 +7,7 @@ export * from './events.js';
 export * from './schemas.js';
 export * from './settings.js';
 export * from './workflow.js';
+export * from './version.js';
 
 export const APP_NAME = 'iPhone AI';
 export const API_PREFIX = '/api';

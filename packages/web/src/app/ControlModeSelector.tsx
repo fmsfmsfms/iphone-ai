@@ -1,5 +1,6 @@
 // Current control mode (Observe Only / Assisted / Supervised). Moving to a
 // mode with more AI autonomy asks for confirmation and explains what changes.
+// Remote devices may only switch to Observe Only (the backend enforces this).
 
 import { Check, ChevronDown, Eye, Hand, Sparkles } from '@gravity-ui/icons';
 import { CONTROL_MODES, type ControlMode } from '@iphone-ai/shared';
@@ -9,7 +10,7 @@ import { useState, type ReactNode } from 'react';
 import { ConfirmDialog } from '../components/ConfirmDialog';
 import { MODE_LEVEL } from '../lib/device-state';
 import { useI18n } from '../lib/i18n';
-import { notifyError, setControlMode, useAppStore, useCanControl } from '../state/store';
+import { notifyError, setControlMode, useAppStore, useCanControl, useIsLocal } from '../state/store';
 
 export const MODE_ICON: Record<ControlMode, ReactNode> = {
   observe: <Eye />,
@@ -29,8 +30,14 @@ export interface ControlModeSelectorProps {
   onChanged?: (mode: ControlMode) => void;
 }
 
+/** Whether this session may pick `mode` (remote devices can only go to Observe Only). */
+export function modeAllowed(mode: ControlMode, current: ControlMode, isLocal: boolean): boolean {
+  return isLocal || mode === 'observe' || mode === current;
+}
+
 export function useModeChange(onChanged?: (mode: ControlMode) => void) {
   const current = useAppStore((s) => s.settings?.permissions.controlMode ?? 'observe');
+  const isLocal = useIsLocal();
   const [pendingMode, setPendingMode] = useState<ControlMode | null>(null);
   const { t } = useI18n();
 
@@ -44,6 +51,8 @@ export function useModeChange(onChanged?: (mode: ControlMode) => void) {
       onChanged?.(mode);
       return;
     }
+    // Never open a confirmation the backend would refuse.
+    if (!modeAllowed(mode, current, isLocal)) return;
     if (MODE_LEVEL[mode] > MODE_LEVEL[current]) {
       setPendingMode(mode);
       return;
@@ -81,7 +90,7 @@ export function useModeChange(onChanged?: (mode: ControlMode) => void) {
     </ConfirmDialog>
   );
 
-  return { current, request, dialog };
+  return { current, isLocal, request, dialog };
 }
 
 function ModeOption({ mode, selected, onSelect, disabled }: { mode: ControlMode; selected: boolean; onSelect: () => void; disabled?: boolean }) {
@@ -115,16 +124,21 @@ export function ControlModeSelector({ variant = 'toolbar', onChanged }: ControlM
   const { t } = useI18n();
   const canControl = useCanControl();
   const [open, setOpen] = useState(false);
-  const { current, request, dialog } = useModeChange(onChanged);
+  const { current, isLocal, request, dialog } = useModeChange(onChanged);
+  const disabled = (mode: ControlMode) => !canControl || !modeAllowed(mode, current, isLocal);
+  const note = !canControl ? t('input.reason.viewOnly') : !isLocal ? t('mode.localOnly') : null;
 
   if (variant === 'inline') {
     return (
-      <div role="menu" aria-label={t('mode.label')} className="grid gap-1.5 sm:grid-cols-3">
-        {CONTROL_MODES.map((mode) => (
-          <div key={mode} className="rounded-xl border border-hairline">
-            <ModeOption mode={mode} selected={mode === current} disabled={!canControl} onSelect={() => request(mode)} />
-          </div>
-        ))}
+      <div className="flex flex-col gap-1.5">
+        <div role="menu" aria-label={t('mode.label')} className="grid gap-1.5 sm:grid-cols-3">
+          {CONTROL_MODES.map((mode) => (
+            <div key={mode} className="rounded-xl border border-hairline">
+              <ModeOption mode={mode} selected={mode === current} disabled={disabled(mode)} onSelect={() => request(mode)} />
+            </div>
+          ))}
+        </div>
+        {canControl && !isLocal ? <p className="text-[11px] text-muted">{note}</p> : null}
         {dialog}
       </div>
     );
@@ -157,7 +171,7 @@ export function ControlModeSelector({ variant = 'toolbar', onChanged }: ControlM
                   key={mode}
                   mode={mode}
                   selected={mode === current}
-                  disabled={!canControl}
+                  disabled={disabled(mode)}
                   onSelect={() => {
                     setOpen(false);
                     request(mode);
@@ -165,7 +179,7 @@ export function ControlModeSelector({ variant = 'toolbar', onChanged }: ControlM
                 />
               ))}
             </div>
-            {!canControl ? <p className="px-2.5 pt-2 text-[11px] text-muted">{t('input.reason.viewOnly')}</p> : null}
+            {note ? <p className="px-2.5 pt-2 text-[11px] text-muted">{note}</p> : null}
           </Popover.Dialog>
         </Popover.Content>
       </Popover>

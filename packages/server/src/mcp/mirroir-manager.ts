@@ -16,7 +16,7 @@ import { existsSync, realpathSync } from 'node:fs';
 
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { getDefaultEnvironment, StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
-import type { McpServerInfo, McpServerState, McpToolInfo } from '@iphone-ai/shared';
+import { APP_VERSION, type McpServerInfo, type McpServerState, type McpToolInfo } from '@iphone-ai/shared';
 
 import type { ActivityLog } from '../core/activity-log.js';
 import type { Logger } from '../core/logger.js';
@@ -52,7 +52,7 @@ export class McpTimeoutError extends Error {
   }
 }
 
-const CLIENT_INFO = { name: 'iphone-ai', version: '0.1.0' };
+const CLIENT_INFO = { name: 'iphone-ai', version: APP_VERSION };
 const MAX_LINE_BYTES = 64 * 1024 * 1024;
 const STDERR_RING = 300;
 /** An instance that stayed up this long resets the crash backoff. */

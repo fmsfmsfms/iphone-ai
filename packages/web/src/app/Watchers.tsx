@@ -2,11 +2,12 @@
 // notifications, the focus-steal notice and the theme.
 
 import { toast } from '@heroui/react';
+import type { ApprovalRequest } from '@iphone-ai/shared';
 import { useEffect, useRef } from 'react';
 
 import { useI18n } from '../lib/i18n';
-import { navigate, useRoute } from '../lib/router';
-import { appStore, setUi, useAppStore, type ToastItem } from '../state/store';
+import { navigate, useRoute, type Route } from '../lib/router';
+import { appStore, setUi, useAppStore, type StoreState, type ToastItem } from '../state/store';
 
 const VARIANT: Record<ToastItem['level'], 'default' | 'accent' | 'success' | 'warning' | 'danger'> = {
   info: 'accent',
@@ -54,7 +55,44 @@ export function FocusStealWatcher() {
   return null;
 }
 
-/** Announces new approval requests when the user is not looking at an approvals view. */
+/**
+ * Whether the page at `route` actually shows a card for this approval:
+ * Live Control lists every pending approval (in its assistant pane); the AI Assistant shows only the
+ * selected conversation's tasks; a workflow page only that workflow's runs.
+ * Unknown task or run → false, so the toast is shown (the safe default).
+ */
+export function approvalCardVisible(approval: ApprovalRequest, route: Route, state: StoreState = appStore.getState()): boolean {
+  switch (route.name) {
+    case 'live':
+      // The assistant pane lists every pending approval, unless the user collapsed it.
+      return !state.ui.liveAssistantCollapsed;
+    case 'assistant':
+      return Boolean(
+        approval.workflowRunId === null &&
+          approval.taskId &&
+          route.conversationId &&
+          state.tasks[approval.taskId]?.conversationId === route.conversationId,
+      );
+    case 'automations':
+      return Boolean(
+        approval.workflowRunId && route.workflowId && state.workflowRuns[approval.workflowRunId]?.workflowId === route.workflowId,
+      );
+    default:
+      return false;
+  }
+}
+
+/** Where "Review" goes: a page that renders this approval's card (Live Control lists them all). */
+export function approvalReviewTarget(approval: ApprovalRequest, state: StoreState = appStore.getState()): Route {
+  if (approval.workflowRunId) {
+    const workflowId = state.workflowRuns[approval.workflowRunId]?.workflowId;
+    return workflowId ? { name: 'automations', workflowId } : { name: 'live' };
+  }
+  const conversationId = approval.taskId ? state.tasks[approval.taskId]?.conversationId : undefined;
+  return conversationId ? { name: 'assistant', conversationId } : { name: 'live' };
+}
+
+/** Announces new approval requests unless a card for that request is already on screen. */
 export function ApprovalWatcher() {
   const { t } = useI18n();
   const route = useRoute();
@@ -77,9 +115,8 @@ export function ApprovalWatcher() {
     for (const approval of approvals) {
       if (seen.current.has(approval.id)) continue;
       seen.current.add(approval.id);
-      const onApprovalsView = route.name === 'live' || route.name === 'assistant' || (approval.workflowRunId !== null && route.name === 'automations');
-      if (onApprovalsView) continue;
-      const target = approval.workflowRunId ? ({ name: 'automations' } as const) : ({ name: 'live' } as const);
+      if (approvalCardVisible(approval, route)) continue;
+      const target = approvalReviewTarget(approval);
       const id = toast(t('approval.toast.title'), {
         description: approval.summary,
         variant: 'warning',
@@ -95,7 +132,7 @@ export function ApprovalWatcher() {
       });
       open.current.set(approval.id, id);
     }
-  }, [approvals, route.name, t]);
+  }, [approvals, route, t]);
   return null;
 }
 

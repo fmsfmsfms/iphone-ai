@@ -16,6 +16,7 @@ import {
 import { Button, Modal, ToggleButton, ToggleButtonGroup, Tooltip } from '@heroui/react';
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type RefObject } from 'react';
 
+import { StopControl } from '../../app/StopControl';
 import { touchAvailability } from '../../lib/device-state';
 import { useLatestFrame, type LoadedFrame } from '../../lib/frames';
 import { fitAspect } from '../../lib/geometry';
@@ -341,7 +342,9 @@ export function PhoneViewer({ interactive = false, toolbar = true, variant = 'fu
           <Modal.Container size="full" placement="center">
             <Modal.Dialog className="flex h-full flex-col gap-0 bg-background/95 p-0" aria-label={t('viewer.enlargedTitle')}>
               <Modal.Header className="flex flex-row items-center gap-3 border-b border-hairline px-5 py-3">
-                <Modal.Heading className="flex-1 text-[15px] font-semibold">{t('viewer.enlargedTitle')}</Modal.Heading>
+                <Modal.Heading className="min-w-0 flex-1 truncate text-[15px] font-semibold">{t('viewer.enlargedTitle')}</Modal.Heading>
+                {/* The full-window view covers the top bar, so it carries its own STOP. */}
+                <StopControl />
                 <Tooltip delay={400}>
                   <Button variant="secondary" size="sm" slot="close">
                     {t('common.close')}

@@ -31,7 +31,7 @@ describe('HTTP security (local listener)', () => {
   it('serves /api/health without a session', async () => {
     const res = await h.local.app.inject({ method: 'GET', url: '/api/health', headers: { host: LOCAL_HOST } });
     expect(res.statusCode).toBe(200);
-    expect(res.json()).toEqual({ ok: true, version: '0.1.0-test' });
+    expect(res.json()).toEqual({ ok: true, version: '0.1.0-test', listener: 'local' });
     expect(res.headers['x-content-type-options']).toBe('nosniff');
     expect(res.headers['x-frame-options']).toBe('DENY');
     expect(res.headers['referrer-policy']).toBe('no-referrer');

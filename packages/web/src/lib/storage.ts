@@ -42,4 +42,6 @@ export const STORAGE_KEYS = {
   sidebarCollapsed: 'iphone-ai.sidebar.collapsed',
   touchMode: 'iphone-ai.live.touchMode',
   language: 'iphone-ai.language',
+  /** Name this browser gives itself when signing in to Remote Access. */
+  remoteDeviceName: 'iphone-ai.remote.deviceName',
 } as const;

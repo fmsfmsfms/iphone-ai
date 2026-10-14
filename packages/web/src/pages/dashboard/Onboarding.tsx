@@ -18,7 +18,7 @@ import { api, type ClaudeCodeStatus, type SettingsPane } from '../../lib/api';
 import { providerReadiness } from '../../lib/device-state';
 import { useI18n } from '../../lib/i18n';
 import { navigate } from '../../lib/router';
-import { notifyError, updateSettings, useAppStore, useCanControl } from '../../state/store';
+import { notifyError, updateSettings, useAppStore, useCanControl, useIsLocal } from '../../state/store';
 
 export interface OnboardingItem {
   id: string;
@@ -52,6 +52,7 @@ export function useOnboardingItems(): { items: OnboardingItem[]; loading: boolea
   const status = useAppStore((s) => s.status);
   const settings = useAppStore((s) => s.settings);
   const canControl = useCanControl();
+  const isLocal = useIsLocal();
   const [busy, setBusy] = useState<string | null>(null);
   const readiness = providerReadiness(settings);
   const claudeCode = useClaudeCodeStatus(readiness.provider?.kind === 'claude-agent-sdk');
@@ -82,6 +83,14 @@ export function useOnboardingItems(): { items: OnboardingItem[]; loading: boolea
       {label}
     </Button>
   );
+
+  // System Settings can only be opened on the Mac (the backend refuses it from remote devices).
+  const paneButton = (id: string, pane: SettingsPane) =>
+    isLocal ? (
+      button(id, t('dashboard.onboarding.openSettings'), <ArrowUpRightFromSquare className="size-3.5" />, openPane(pane))
+    ) : (
+      <span className="text-xs text-muted">{t('permission.localOnly')}</span>
+    );
 
   const server = status.server;
   const mcpDetail =
@@ -121,7 +130,7 @@ export function useOnboardingItems(): { items: OnboardingItem[]; loading: boolea
       : mirroring === 'paused'
         ? button('mirroring', t('dashboard.onboarding.mirroring.resume'), <CirclePlay className="size-3.5" />, run('mirroring', () => refreshScreen({ resume: true })))
         : mirroring === 'no_window'
-          ? button('mirroring', t('dashboard.onboarding.openSettings'), <ArrowUpRightFromSquare className="size-3.5" />, openPane('accessibility'))
+          ? paneButton('mirroring', 'accessibility')
           : mirroring === 'unknown'
             ? button('mirroring', t('viewer.checkNow'), <ArrowsRotateRight className="size-3.5" />, run('mirroring', checkConnection))
             : null;
@@ -148,14 +157,14 @@ export function useOnboardingItems(): { items: OnboardingItem[]; loading: boolea
       title: t('dashboard.onboarding.screenRecording.title'),
       detail: sr ? t('dashboard.onboarding.screenRecording.done') : t('dashboard.onboarding.screenRecording.todo'),
       done: sr,
-      action: sr ? null : button('screen-recording', t('dashboard.onboarding.openSettings'), <ArrowUpRightFromSquare className="size-3.5" />, openPane('screen-recording')),
+      action: sr ? null : paneButton('screen-recording', 'screen-recording'),
     },
     {
       id: 'accessibility',
       title: t('dashboard.onboarding.accessibility.title'),
       detail: ax ? t('dashboard.onboarding.accessibility.done') : t('dashboard.onboarding.accessibility.todo'),
       done: ax,
-      action: ax ? null : button('accessibility', t('dashboard.onboarding.openSettings'), <ArrowUpRightFromSquare className="size-3.5" />, openPane('accessibility')),
+      action: ax ? null : paneButton('accessibility', 'accessibility'),
     },
     {
       id: 'provider',

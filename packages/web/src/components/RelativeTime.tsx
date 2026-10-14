@@ -61,12 +61,10 @@ export interface RelativeTimeProps {
 
 export function RelativeTime({ at, fallback, className }: RelativeTimeProps) {
   const { locale, t } = useI18n();
-  const [now, setNow] = useState(() => Date.now());
-  useEffect(() => {
-    if (!at) return;
-    const id = setTimeout(() => setNow(Date.now()), tickFor(Date.now() - at));
-    return () => clearTimeout(id);
-  }, [at, now]);
+  // Tick on an interval that only depends on the age bucket, never on `at` itself:
+  // the live viewer moves `at` about twice a second, and a timer re-armed on every
+  // change would never fire (freezing `now` and showing "in 2 min").
+  const now = useNow(at ? tickFor(Date.now() - at) : 60_000);
   if (!at) return <span className={className}>{fallback ?? t('common.never')}</span>;
   const date = new Date(at);
   return (

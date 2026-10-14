@@ -2,13 +2,13 @@
 // mode), the chat with each task's progress and steps, the cloud privacy
 // notice and the composer (disabled with a reason when sending isn't possible).
 
-import { ArrowUpRightFromSquare, BroomMotion, ChevronDown, Cloud, Comments, EllipsisVertical, Eye, Gear, Hand, Smartphone, Sparkles, TrashBin } from '@gravity-ui/icons';
+import { ArrowUpRightFromSquare, BroomMotion, ChevronDown, Comments, EllipsisVertical, Eye, Gear, Hand, Smartphone, Sparkles, TrashBin } from '@gravity-ui/icons';
 import type { ChatMessage, Conversation } from '@iphone-ai/shared';
 import { Button, Dropdown, Label } from '@heroui/react';
 import { useCallback, useMemo, useRef, useState, type ReactNode } from 'react';
 
 import { MODE_ICON, useModeChange } from '../../app/ControlModeSelector';
-import { ChatThread, Composer } from '../../components/chat';
+import { ChatThread, CloudDisclosureNotice, Composer } from '../../components/chat';
 import { ConfirmDialog } from '../../components/ConfirmDialog';
 import { StatusChip } from '../../components/StatusChip';
 import { api } from '../../lib/api';
@@ -19,11 +19,11 @@ import {
   notifyError,
   replaceMessages,
   sendChatMessage,
-  updateSettings,
   useActiveTask,
   useAppStore,
   useCanControl,
   useConversationMessages,
+  useIsLocal,
 } from '../../state/store';
 import { assistantBlockReason, EXAMPLE_PROMPT_KEYS, isUntitled, needsCloudDisclosure, reasonText, type Reason } from './assistant-utils';
 import { ProviderPicker } from './ProviderPicker';
@@ -55,7 +55,6 @@ export function ConversationView({ conversation, onCreated, onChanged, onDelete 
   const provider = providerReadiness(settings).provider;
   const disclosure = needsCloudDisclosure(settings, provider);
   const [confirmClear, setConfirmClear] = useState(false);
-  const [acknowledging, setAcknowledging] = useState(false);
   /** Conversation created by a send that then failed; reused for the next attempt. */
   const pendingCreated = useRef<Conversation | null>(null);
 
@@ -93,17 +92,6 @@ export function ConversationView({ conversation, onCreated, onChanged, onDelete 
     },
     [conversation, onChanged, onCreated, t],
   );
-
-  const acknowledge = async () => {
-    setAcknowledging(true);
-    try {
-      await updateSettings({ privacy: { cloudDisclosureAcknowledged: true } });
-    } catch (err) {
-      notifyError(t('common.saveFailed'), err);
-    } finally {
-      setAcknowledging(false);
-    }
-  };
 
   const renderAfterMessage = useCallback(
     (message: ChatMessage) =>
@@ -187,29 +175,7 @@ export function ConversationView({ conversation, onCreated, onChanged, onDelete 
       )}
 
       <footer className="border-t border-hairline px-[max(1.25rem,calc((100%-50rem)/2))] pt-3 pb-4">
-        {disclosure && provider && canControl ? (
-          <div role="note" className="ai-soft-bg mb-3 rounded-2xl border border-hairline p-4">
-            <div className="flex items-start gap-3">
-              <span aria-hidden className="flex size-8 shrink-0 items-center justify-center rounded-xl bg-background/60 text-ai-blue [&>svg]:size-4">
-                <Cloud />
-              </span>
-              <div className="min-w-0 flex-1">
-                <p className="text-[13px] font-semibold text-foreground">{t('assistant.disclosure.title', { provider: provider.label })}</p>
-                <p className="mt-1 text-xs leading-relaxed text-muted">{t('assistant.disclosure.body', { provider: provider.label })}</p>
-                <p className="mt-1 text-xs leading-relaxed text-muted">{t('assistant.disclosure.body2')}</p>
-                <div className="mt-3 flex flex-wrap items-center gap-2">
-                  <Button size="sm" variant="primary" isPending={acknowledging} onPress={() => void acknowledge()}>
-                    {t('assistant.disclosure.accept')}
-                  </Button>
-                  <Button size="sm" variant="ghost" onPress={() => navigate({ name: 'settings', section: 'ai' })}>
-                    <Gear className="size-3.5" />
-                    {t('assistant.disclosure.local')}
-                  </Button>
-                </div>
-              </div>
-            </div>
-          </div>
-        ) : null}
+        <CloudDisclosureNotice className="mb-3" />
         {blockReason?.action ? <ReasonAction reason={blockReason} taskConversationId={activeTask?.conversationId ?? null} /> : null}
         <Composer onSend={send} disabledReason={blockText} placeholder={t('assistant.placeholder')} autoFocus={!blockText} />
       </footer>
@@ -238,6 +204,7 @@ export function ConversationView({ conversation, onCreated, onChanged, onDelete 
 function ObserveHint() {
   const { t } = useI18n();
   const canControl = useCanControl();
+  const isLocal = useIsLocal();
   const { request, dialog } = useModeChange();
   return (
     <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 border-b border-hairline bg-surface/60 px-5 py-2 text-xs text-muted">
@@ -247,7 +214,8 @@ function ObserveHint() {
         {' — '}
         {t('assistant.observeHint')}
       </span>
-      {canControl ? (
+      {canControl && !isLocal ? <span className="text-[11px] text-muted">{t('mode.localOnly')}</span> : null}
+      {canControl && isLocal ? (
         <Dropdown>
           <Button size="sm" variant="ghost" className="h-7">
             {t('assistant.changeMode')}

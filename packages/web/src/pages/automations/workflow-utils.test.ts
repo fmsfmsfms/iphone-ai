@@ -9,6 +9,7 @@ import {
   formatClockDuration,
   insertAt,
   isDraftDirty,
+  isRunLive,
   lastSuccessfulRun,
   mergeRuns,
   moveItem,
@@ -148,11 +149,26 @@ describe('runs', () => {
     const c = finished({ id: 'r3', startedAt: 3_000 });
     expect(lastSuccessfulRun([a, b, c])?.id).toBe('r3');
     expect(lastSuccessfulRun([b])).toBeNull();
-    const live = makeRun({ id: 'r2', startedAt: 2_000, status: 'running' });
+    const fetchedLive = makeRun({ id: 'r2', startedAt: 2_000, status: 'running', currentStepIndex: 0 });
+    const live = makeRun({ id: 'r2', startedAt: 2_000, status: 'paused', currentStepIndex: 1 });
     const other = makeRun({ id: 'x', workflowId: 'other', startedAt: 9_000 });
-    const merged = mergeRuns([a, b], [live, other], 'wf_1');
+    const merged = mergeRuns([a, fetchedLive], [live, other], 'wf_1');
     expect(merged.map((r) => r.id)).toEqual(['r2', 'r1']);
-    expect(merged[0]!.status).toBe('running');
+    // Both live: the store copy (fed by events) is the fresher one.
+    expect(merged[0]!.status).toBe('paused');
+    expect(merged[0]!.currentStepIndex).toBe(1);
+  });
+
+  it('never lets a stale live store copy hide a run the server reports as finished', () => {
+    // The socket dropped while the run was stopped elsewhere: the store still says "running".
+    const stale = makeRun({ id: 'r1', status: 'running' });
+    const stopped = makeRun({ id: 'r1', status: 'stopped', endedAt: 5_000 });
+    const merged = mergeRuns([stopped], [stale], 'wf_1');
+    expect(merged).toHaveLength(1);
+    expect(merged[0]!.status).toBe('stopped');
+    expect(isRunLive(merged[0])).toBe(false);
+    // A finished store copy still wins over an older fetched live one.
+    expect(mergeRuns([stale], [stopped], 'wf_1')[0]!.status).toBe('stopped');
   });
 });
 

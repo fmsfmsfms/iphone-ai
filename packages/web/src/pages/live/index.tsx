@@ -12,7 +12,7 @@ import { refreshScreen } from '../../components/phone/phone-actions';
 import { isTypingTarget, useWindowKeydown } from '../../lib/hotkeys';
 import { useI18n } from '../../lib/i18n';
 import { safeStorage } from '../../lib/storage';
-import { appStore } from '../../state/store';
+import { appStore, setUi } from '../../state/store';
 import { AssistantPanel } from './AssistantPanel';
 import { DevicePanel } from './DevicePanel';
 import { useManualControl } from './useManualControl';
@@ -63,7 +63,21 @@ export default function LivePage() {
     </Panel>
   );
   const assistant = (
-    <Panel key="assistant" id="assistant" defaultSize="380px" minSize="300px" maxSize="600px" collapsible collapsedSize="0px" className="min-w-0">
+    <Panel
+      key="assistant"
+      id="assistant"
+      defaultSize="380px"
+      minSize="300px"
+      maxSize="600px"
+      collapsible
+      collapsedSize="0px"
+      className="min-w-0"
+      // Approval toasts stay quiet on this page only while this pane (which lists them) is open.
+      onResize={(size) => {
+        const collapsed = size.inPixels < 1;
+        if (appStore.getState().ui.liveAssistantCollapsed !== collapsed) setUi({ liveAssistantCollapsed: collapsed });
+      }}
+    >
       <div dir={dir} className="h-full bg-surface/40">
         <AssistantPanel />
       </div>

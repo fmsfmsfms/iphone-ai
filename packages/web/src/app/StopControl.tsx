@@ -1,5 +1,8 @@
 // The always-visible emergency stop. While the stop is latched the button
 // becomes "Stopped — Re-arm control" and explains exactly what happened.
+// Below the `sm` breakpoint (phone-width browsers) the label is dropped so the
+// button always fits; `compact` drops it at every width. The button keeps its
+// accessible name either way.
 
 import { ArrowRotateLeft, OctagonXmark } from '@gravity-ui/icons';
 import { Button, Popover, Tooltip } from '@heroui/react';
@@ -12,6 +15,8 @@ import { useI18n } from '../lib/i18n';
 import { engageStop, rearmControl, useCanControl, useStopState } from '../state/store';
 
 export function StopControl({ compact }: { compact?: boolean }) {
+  const padding = compact ? 'px-3' : 'px-3 sm:px-4';
+  const labelClass = compact ? 'sr-only' : 'hidden sm:inline';
   const { t } = useI18n();
   const stop = useStopState();
   const canControl = useCanControl();
@@ -38,10 +43,10 @@ export function StopControl({ compact }: { compact?: boolean }) {
           aria-keyshortcuts="Meta+Period"
           onPress={() => void press()}
           isPending={pending}
-          className={['stop-button h-9 shrink-0 rounded-full font-semibold tracking-wide', compact ? 'px-3' : 'px-4'].join(' ')}
+          className={['stop-button h-9 shrink-0 rounded-full font-semibold tracking-wide', padding].join(' ')}
         >
           <OctagonXmark className="size-4" />
-          <span className={compact ? 'sr-only' : 'text-[13px]'}>{t('stop.button')}</span>
+          <span className={[labelClass, 'text-[13px]'].join(' ')}>{t('stop.button')}</span>
         </Button>
         <Tooltip.Content placement="bottom end" className="max-w-72 text-xs leading-relaxed">
           <p className="font-medium">{t('stop.tooltip')}</p>
@@ -61,11 +66,11 @@ export function StopControl({ compact }: { compact?: boolean }) {
       <Popover isOpen={popoverOpen} onOpenChange={setPopoverOpen}>
         <Button
           variant="outline"
-          className="h-9 shrink-0 rounded-full border-danger/50 bg-danger/10 px-4 text-[13px] font-semibold text-danger"
+          className={['h-9 shrink-0 rounded-full border-danger/50 bg-danger/10 text-[13px] font-semibold text-danger', padding].join(' ')}
           aria-label={t('stop.latched.button')}
         >
           <OctagonXmark className="size-4" />
-          <span className={compact ? 'sr-only' : ''}>{t('stop.latched.button')}</span>
+          <span className={labelClass}>{t('stop.latched.button')}</span>
         </Button>
         <Popover.Content placement="bottom end" className="w-[22rem] max-w-[calc(100vw-2rem)]">
           <Popover.Dialog className="p-4">

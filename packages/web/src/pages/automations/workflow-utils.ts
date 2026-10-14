@@ -212,11 +212,20 @@ export function retryOptions(run: WorkflowRun): { whole: boolean; fromFailed: bo
   return { whole: finishedBadly, fromFailed: finishedBadly && failedIndex > 0 };
 }
 
-/** Merges runs fetched over HTTP with live copies from the store (by id), newest first. */
+/**
+ * Merges runs fetched over HTTP with live copies from the store (by id),
+ * newest first. The store copy wins, except that a finished copy beats a live
+ * one: a run never goes back from finished to live (retries are new runs), so
+ * a "running" store copy next to a finished fetched one missed its last events.
+ */
 export function mergeRuns(fetched: readonly WorkflowRun[], live: readonly WorkflowRun[], workflowId: string): WorkflowRun[] {
   const byId = new Map<string, WorkflowRun>();
   for (const run of fetched) byId.set(run.id, run);
-  for (const run of live) if (run.workflowId === workflowId) byId.set(run.id, run);
+  for (const run of live) {
+    if (run.workflowId !== workflowId) continue;
+    const prev = byId.get(run.id);
+    if (!prev || isRunLive(prev) || !isRunLive(run)) byId.set(run.id, run);
+  }
   return [...byId.values()].sort((a, b) => b.startedAt - a.startedAt);
 }
 

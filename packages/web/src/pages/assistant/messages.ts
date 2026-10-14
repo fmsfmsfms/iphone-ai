@@ -71,12 +71,6 @@ registerMessages('assistant', {
     'example.safari': 'Open Safari and search for something.',
     'example.notifications': 'Find the screen where I can change notification settings.',
 
-    'disclosure.title': 'Before you send: {provider} runs in the cloud',
-    'disclosure.body': 'To work on your iPhone, iPhone AI sends {provider} screenshots of your iPhone screen and the text on it — including anything visible, such as messages, names or notifications.',
-    'disclosure.body2': 'Nothing is sent until you start a task. Choose a local model in Settings to keep everything on this Mac.',
-    'disclosure.accept': 'I understand',
-    'disclosure.local': 'Use a local model',
-
     'reason.provider': '{provider}: {reason}',
     'reason.taskElsewhere': 'A task is running in another conversation. Wait for it to finish, or cancel it.',
     'reason.loading': 'Checking the connection to your iPhone…',
@@ -209,12 +203,6 @@ registerMessages('assistant', {
     'example.explain': 'التقط صورة للشاشة واشرح ما يظهر عليها.',
     'example.safari': 'افتح Safari وابحث عن شيء ما.',
     'example.notifications': 'ابحث عن الشاشة التي يمكنني فيها تغيير إعدادات الإشعارات.',
-
-    'disclosure.title': 'قبل الإرسال: {provider} يعمل في السحابة',
-    'disclosure.body': 'للعمل على جهاز iPhone يرسل iPhone AI إلى {provider} لقطات من شاشة iPhone والنص الظاهر عليها — بما في ذلك أي شيء مرئي مثل الرسائل أو الأسماء أو الإشعارات.',
-    'disclosure.body2': 'لا يُرسل شيء حتى تبدأ مهمة. اختر نموذجًا محليًا من الإعدادات لإبقاء كل شيء على هذا الـ Mac.',
-    'disclosure.accept': 'فهمت',
-    'disclosure.local': 'استخدام نموذج محلي',
 
     'reason.provider': '{provider}: {reason}',
     'reason.taskElsewhere': 'هناك مهمة قيد التنفيذ في محادثة أخرى. انتظر انتهاءها أو ألغِها.',

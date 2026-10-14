@@ -1,6 +1,7 @@
 // Explains missing macOS permissions and deep-links to System Settings.
 // Permissions belong to the "iPhone AI" app (in development: to the app that
-// launched the backend, e.g. the terminal).
+// launched the backend, e.g. the terminal). Opening System Settings only works
+// on the Mac, so remote devices get a note instead of the buttons.
 
 import { ArrowUpRightFromSquare, ArrowsRotateRight, ShieldExclamation } from '@gravity-ui/icons';
 import { Button } from '@heroui/react';
@@ -9,7 +10,7 @@ import { useState } from 'react';
 import { api, type SettingsPane } from '../lib/api';
 import { missingPermissions } from '../lib/device-state';
 import { useI18n } from '../lib/i18n';
-import { notifyError, refreshConnection, useStatus } from '../state/store';
+import { notifyError, refreshConnection, useIsLocal, useStatus } from '../state/store';
 
 export interface PermissionBannerProps {
   /** Panes to explain; defaults to whatever the latest status reports as missing. */
@@ -39,6 +40,7 @@ const PANE_KEYS: Record<SettingsPane, { title: string; body: string; button: str
 export function PermissionBanner({ panes, compact, className }: PermissionBannerProps) {
   const { t } = useI18n();
   const status = useStatus();
+  const isLocal = useIsLocal();
   const list = panes ?? missingPermissions(status);
   const [opening, setOpening] = useState<SettingsPane | null>(null);
   const [checking, setChecking] = useState(false);
@@ -82,18 +84,21 @@ export function PermissionBanner({ panes, compact, className }: PermissionBanner
             <div key={pane} className="space-y-1">
               <p className="text-[13px] font-semibold text-foreground">{t(PANE_KEYS[pane].title)}</p>
               {!compact ? <p className="text-xs leading-relaxed text-muted">{t(PANE_KEYS[pane].body)}</p> : null}
-              <Button
-                size="sm"
-                variant="secondary"
-                className="mt-1 h-auto min-h-8 max-w-full py-1.5 text-start whitespace-normal"
-                isPending={opening === pane}
-                onPress={() => void open(pane)}
-              >
-                <ArrowUpRightFromSquare className="size-3.5 shrink-0" />
-                {t(PANE_KEYS[pane].button)}
-              </Button>
+              {isLocal ? (
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  className="mt-1 h-auto min-h-8 max-w-full py-1.5 text-start whitespace-normal"
+                  isPending={opening === pane}
+                  onPress={() => void open(pane)}
+                >
+                  <ArrowUpRightFromSquare className="size-3.5 shrink-0" />
+                  {t(PANE_KEYS[pane].button)}
+                </Button>
+              ) : null}
             </div>
           ))}
+          {!isLocal ? <p className="text-xs leading-relaxed font-medium text-foreground/90">{t('permission.localOnly')}</p> : null}
           <p className="text-xs leading-relaxed text-muted">{t('permission.ownership')}</p>
           {list.includes('screen-recording') ? (
             <p className="text-xs leading-relaxed text-warning">{t('permission.restartNote')}</p>

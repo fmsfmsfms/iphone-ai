@@ -1,6 +1,6 @@
 {
   "name": "iphone-ai",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "description": "iPhone AI \u2014 monitor and control a physical iPhone from macOS through Mirroir MCP, manual controls, and AI agents.",
   "license": "UNLICENSED",
@@ -20,7 +20,8 @@
     "test:device": "pnpm --filter @iphone-ai/server test:device",
     "package:mac": "node scripts/package-mac.mjs",
     "tauri": "tauri",
-    "icon": "node scripts/generate-icon.mjs"
+    "icon": "node scripts/generate-icon.mjs",
+    "version:bump": "node scripts/bump-version.mjs"
   },
   "devDependencies": {
     "@tauri-apps/cli": "2.12.2"
