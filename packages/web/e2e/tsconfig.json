@@ -1,0 +1,16 @@
+{
+  // Type checking for the Playwright tests and config (the package tsconfig only covers src/).
+  //   npx tsc -p e2e/tsconfig.json   (from packages/web)
+  "extends": "../../../tsconfig.base.json",
+  "compilerOptions": {
+    "target": "ES2023",
+    "lib": ["ES2023", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "noEmit": true,
+    // @types/node is a dependency of the server package only.
+    "typeRoots": ["../../server/node_modules/@types"],
+    "types": ["node"]
+  },
+  "include": ["./**/*.ts", "../playwright.config.ts"]
+}
