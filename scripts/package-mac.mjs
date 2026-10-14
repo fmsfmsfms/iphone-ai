@@ -16,6 +16,9 @@
 //   --stage-only              stop after step 5 (enough for `cargo check` / `cargo run` in src-tauri)
 //   --debug                   build the debug profile (faster compile, larger app)
 //   --allow-unofficial-node   accept a node binary that is not signed by the Node.js Foundation
+//   --install                 also install the app to /Applications/iPhone AI.app (refused while it is running).
+//                             Launch it from there: macOS blocks apps inside ~/Documents, ~/Desktop or ~/Downloads
+//                             from reading their own bundled server until a privacy prompt is answered.
 
 import { spawn, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
@@ -134,13 +137,14 @@ function dirSize(dir) {
 
 // ── options ─────────────────────────────────────────────────────────────────
 function parseOptions(argv) {
-  const options = { claudeCode: true, stageOnly: false, debug: false, allowUnofficialNode: false };
+  const options = { claudeCode: true, stageOnly: false, debug: false, allowUnofficialNode: false, install: false };
   for (const arg of argv) {
     if (arg === '--') continue; // `pnpm package:mac -- --flag` passes the separator through
     else if (arg === '--no-claude-code') options.claudeCode = false;
     else if (arg === '--stage-only') options.stageOnly = true;
     else if (arg === '--debug') options.debug = true;
     else if (arg === '--allow-unofficial-node') options.allowUnofficialNode = true;
+    else if (arg === '--install') options.install = true;
     else if (arg === '-h' || arg === '--help') {
       const lines = readFileSync(fileURLToPath(import.meta.url), 'utf8').split('\n').slice(1);
       const header = lines.slice(0, lines.findIndex((line) => !line.startsWith('//')));
@@ -476,6 +480,25 @@ function release(identity, options) {
   info(dim('Tip: move it to /Applications and always launch that copy, so privacy grants stay attached to one path.'));
 }
 
+/** Copies release/iPhone AI.app to /Applications (the only supported launch location). */
+function installApp() {
+  const source = path.join(releaseDir, APP_NAME);
+  const target = path.join('/Applications', APP_NAME);
+  const running = capture('/usr/bin/pgrep', ['-f', `${target}/Contents/MacOS/`]);
+  if (running.ok && running.output.trim()) {
+    throw new BuildError(`${target} is running. Quit iPhone AI, then run the install again.`);
+  }
+  if (existsSync(target)) {
+    const plist = capture('/usr/bin/defaults', ['read', path.join(target, 'Contents', 'Info'), 'CFBundleIdentifier']);
+    if (plist.output.trim() !== BUNDLE_ID) throw new BuildError(`${target} exists but is not iPhone AI (${plist.output.trim()}); not replacing it.`);
+    rmSync(target, { recursive: true, force: true });
+  }
+  run('/usr/bin/ditto', [source, target]);
+  const verify = capture('/usr/bin/codesign', ['--verify', '--deep', '--strict', target]);
+  if (!verify.ok) throw new BuildError(`installed copy failed signature verification: ${verify.output}`);
+  info(green(`installed ${target} ✓`));
+}
+
 async function main() {
   const options = parseOptions(process.argv.slice(2));
   checkPrerequisites(options);
@@ -490,6 +513,7 @@ async function main() {
   }
   const identity = await buildApp(chooseIdentity(), options);
   release(identity, options);
+  if (options.install) installApp();
 }
 
 // Exported for scripted checks; running the file performs the build.

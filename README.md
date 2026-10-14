@@ -37,9 +37,13 @@ iPhone AI.app (Tauri) ─► Node backend ─► Mirroir MCP (stdio) ─► iPho
 
 ```bash
 pnpm install
-pnpm package:mac          # builds release/iPhone AI.app
-open "release/iPhone AI.app"
+pnpm package:mac -- --install   # builds release/iPhone AI.app and installs /Applications/iPhone AI.app
+open "/Applications/iPhone AI.app"
 ```
+
+Always launch the copy in **/Applications**: macOS blocks an app inside `~/Documents`,
+`~/Desktop` or `~/Downloads` from reading its own bundled server until a privacy prompt is
+answered, and the app tells you to move it if you try.
 
 Then follow **Dashboard → Setup checklist**. Full instructions: [docs/SETUP.md](docs/SETUP.md).
 

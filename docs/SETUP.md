@@ -17,7 +17,7 @@ project-local configuration (see [Security](SECURITY.md)).
 
 ```bash
 pnpm install
-pnpm package:mac
+pnpm package:mac -- --install
 ```
 
 This builds the UI and backend, bundles the official Node.js runtime and (optionally) the
@@ -30,7 +30,12 @@ Application" / "Apple Development" identity in your keychain. A stable identity 
 macOS privacy permissions are tied to the signature, so ad-hoc builds lose their grants
 after every rebuild. If macOS asks whether `codesign` may use your key, choose **Always Allow**.
 
-Optionally move the app to `/Applications`.
+`--install` copies it to **`/Applications/iPhone AI.app`** (quit iPhone AI first when
+rebuilding). Always launch that copy: macOS privacy protection blocks an app inside
+`~/Documents`, `~/Desktop`, `~/Downloads` or iCloud Drive from reading its own bundled
+server until a prompt is answered, so the app refuses to start there and asks you to move it.
+The packaging script downloads the official Node.js runtime from nodejs.org and verifies its
+SHA-256 against nodejs.org's published checksums before bundling it.
 
 ## 3. First launch
 

@@ -20,3 +20,9 @@ codegen-units = 1
 lto = true
 opt-level = "s"
 strip = true
+
+# Build scripts and proc-macros are dlopen'ed by rustc on this Mac. On macOS 27
+# a stripped proc-macro dylib fails dyld's LINKEDIT alignment check ("can't
+# find crate"), so only the shipped binary is stripped.
+[profile.release.build-override]
+strip = false

@@ -226,6 +226,14 @@ impl Backend {
 
     fn spawn_backend(self: &Arc<Self>, generation: u64) -> Result<(), String> {
         let paths = &self.paths;
+        if let Some(folder) = std::env::var_os("HOME").and_then(|home| protected_folder(&paths.node, Path::new(&home)))
+        {
+            return Err(format!(
+                "iPhone AI is running from your {folder} folder. macOS privacy protection makes its built-in \
+                 server wait for permission to read files there, so it cannot start. Move \"iPhone AI.app\" to \
+                 the Applications folder and open it from there."
+            ));
+        }
         if !paths.node.is_file() {
             return Err(format!("The bundled Node.js runtime is missing: {}", paths.node.display()));
         }
@@ -504,6 +512,18 @@ fn read_lines(stream: impl Read, mut on_line: impl FnMut(&str)) {
 }
 
 /// `LISTENING <port>` -> port.
+/// Folders macOS protects with a per-app privacy prompt ("Files and Folders").
+/// A bundled helper reading its own files there blocks until someone answers.
+fn protected_folder(executable: &Path, home: &Path) -> Option<&'static str> {
+    const FOLDERS: [(&str, &str); 4] = [
+        ("Documents", "Documents"),
+        ("Desktop", "Desktop"),
+        ("Downloads", "Downloads"),
+        ("Library/Mobile Documents", "iCloud Drive"),
+    ];
+    FOLDERS.iter().find(|(dir, _)| executable.starts_with(home.join(dir))).map(|(_, name)| *name)
+}
+
 fn parse_listening(line: &str) -> Option<u16> {
     let port = line.trim().strip_prefix("LISTENING ")?.trim();
     port.parse::<u16>().ok().filter(|port| *port != 0)
@@ -607,6 +627,20 @@ fn group_alive(pgid: libc::pid_t) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn detects_privacy_protected_install_locations() {
+        let home = Path::new("/Users/me");
+        let in_docs = Path::new("/Users/me/Documents/GitHub/iphone ai/release/iPhone AI.app/Contents/MacOS/node");
+        assert_eq!(protected_folder(in_docs, home), Some("Documents"));
+        assert_eq!(
+            protected_folder(Path::new("/Users/me/Desktop/iPhone AI.app/Contents/MacOS/node"), home),
+            Some("Desktop")
+        );
+        assert_eq!(protected_folder(Path::new("/Applications/iPhone AI.app/Contents/MacOS/node"), home), None);
+        assert_eq!(protected_folder(Path::new("/Users/me/Applications/iPhone AI.app/Contents/MacOS/node"), home), None);
+        assert_eq!(protected_folder(Path::new("/Users/me/DocumentsArchive/x/node"), home), None);
+    }
 
     #[test]
     fn parses_the_listening_line() {
