@@ -153,7 +153,7 @@ export class AnthropicProvider implements TurnProvider {
     const out: BetaMessageParam[] = [];
     for (const m of history) {
       if (m.role === 'user') {
-        out.push({ role: 'user', content: m.content.map(toBlock) });
+        out.push({ role: 'user', content: this.visible(m.content).map(toBlock) });
       } else if (m.role === 'assistant') {
         if (m.native && m.nativeProvider === this.config.id) {
           out.push({ role: 'assistant', content: m.native as BetaContentBlockParam[] });
@@ -172,7 +172,7 @@ export class AnthropicProvider implements TurnProvider {
             type: 'tool_result' as const,
             tool_use_id: r.callId,
             is_error: r.isError,
-            content: r.content.map((c) =>
+            content: this.visible(r.content).map((c) =>
               c.type === 'text'
                 ? { type: 'text' as const, text: c.text }
                 : {
@@ -187,6 +187,13 @@ export class AnthropicProvider implements TurnProvider {
     return out;
   }
 
+  /** Text-only configurations never receive images (ProviderConfig.vision contract). */
+  private visible(content: ModelContent[]): ModelContent[] {
+    if (this.config.vision) return content;
+    const kept = content.filter((c) => c.type === 'text');
+    return kept.length ? kept : [{ type: 'text', text: '(image omitted: this model is configured without vision)' }];
+  }
+
   async complete(request: { system: string; content: ModelContent[]; signal: AbortSignal; maxTokens?: number }): Promise<string> {
     try {
       const stream = this.client.beta.messages.stream(
@@ -194,7 +201,7 @@ export class AnthropicProvider implements TurnProvider {
           model: this.config.model,
           max_tokens: request.maxTokens ?? 8000,
           system: request.system,
-          messages: [{ role: 'user', content: request.content.map(toBlock) }],
+          messages: [{ role: 'user', content: this.visible(request.content).map(toBlock) }],
           ...this.requestExtras(),
         } as Anthropic.Beta.Messages.MessageCreateParamsStreaming,
         { signal: request.signal },
@@ -209,6 +216,13 @@ export class AnthropicProvider implements TurnProvider {
       if (err instanceof Anthropic.APIError) throw mapApiError(err);
       throw err;
     }
+  }
+
+  /** Model ids available to this key (for the settings UI). */
+  async listModels(signal: AbortSignal): Promise<string[]> {
+    const ids: string[] = [];
+    for await (const model of this.client.models.list({}, { signal })) ids.push(model.id);
+    return ids;
   }
 
   async test(signal: AbortSignal): Promise<ProviderTestResult> {

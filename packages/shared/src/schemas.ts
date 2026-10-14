@@ -232,6 +232,7 @@ export const settingsPatchSchema = z
       })
       .partial(),
   })
+  .partial()
   .strict();
 
 export const remotePasscodeSchema = z.object({

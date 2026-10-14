@@ -115,6 +115,8 @@ export interface ActionContext {
   approvalId?: string | null;
   /** Remote viewers must have been granted control (checked by the HTTP layer too). */
   remoteControlAllowed?: boolean;
+  /** Typed text marked sensitive is never written to the activity log, even when text logging is on. */
+  sensitive?: boolean;
 }
 
 const POINTER_KINDS = new Set(['tap', 'double_tap', 'long_press', 'swipe', 'drag']);
@@ -146,6 +148,11 @@ export class DeviceController extends EventEmitter {
     private readonly hub: EventHub,
     private readonly activity: ActivityLog,
     log: Logger,
+    /**
+     * Permissions to assume when `mirroir doctor` is unavailable — ONLY for the
+     * mock Mirroir server used in tests/CI (never set for the real binary).
+     */
+    private readonly assumedPermissions: Omit<MacPermissions, 'checkedAt'> | null = null,
   ) {
     super();
     this.log = log.child('device');
@@ -297,16 +304,22 @@ export class DeviceController extends EventEmitter {
   /** Runs `mirroir doctor --json` for Screen Recording / Accessibility (no TCC prompt, no focus change). */
   async refreshPermissions(): Promise<MacPermissions> {
     const checks = await this.mirroir.runDoctor();
-    if (!checks) return this.permissions;
+    if (!checks) {
+      if (this.assumedPermissions) this.applyPermissions({ ...this.assumedPermissions, checkedAt: Date.now() });
+      return this.permissions;
+    }
     const find = (name: string) => checks.find((c) => c.name === name);
     const capture = find('Screen capture');
     const ax = find('Accessibility');
-    const next: MacPermissions = {
+    return this.applyPermissions({
       screenRecording: capture ? (capture.status === 'passed' ? 'granted' : 'denied') : 'unknown',
       accessibility: ax ? (ax.status === 'passed' ? 'granted' : 'denied') : 'unknown',
       source: 'mirroir doctor',
       checkedAt: Date.now(),
-    };
+    });
+  }
+
+  private applyPermissions(next: MacPermissions): MacPermissions {
     const changed =
       next.screenRecording !== this.permissions.screenRecording || next.accessibility !== this.permissions.accessibility;
     this.permissions = next;
@@ -578,13 +591,14 @@ export class DeviceController extends EventEmitter {
     const tool = ACTION_TOOL[action.kind];
     if ((ctx.actor === 'user' || ctx.actor === 'remote-user') && !settings.permissions.auditManualActions) return;
     const { kind: _kind, ...rest } = action;
-    const args = redactToolArgs(tool, rest as Record<string, unknown>, { keepTypedText: settings.privacy.logTypedText });
+    const keepTypedText = settings.privacy.logTypedText && !ctx.sensitive;
+    const args = redactToolArgs(tool, rest as Record<string, unknown>, { keepTypedText });
     this.activity.record({
       category: ctx.actor === 'ai' ? 'ai' : ctx.actor === 'workflow' ? 'workflow' : 'manual',
       type: 'tool.call',
       actor: ctx.actor,
       severity: ok ? 'info' : 'warning',
-      summary: `${describeAction(action, settings.privacy.logTypedText)} — ${ok ? 'done' : `failed: ${firstLine(message)}`}`,
+      summary: `${describeAction(action, keepTypedText)} — ${ok ? 'done' : `failed: ${firstLine(message)}`}`,
       tool,
       success: ok,
       durationMs,

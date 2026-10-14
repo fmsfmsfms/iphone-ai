@@ -1,0 +1,243 @@
+:root {
+  color-scheme: dark;
+  --bg: #0b0c10;
+  --panel: #14161c;
+  --border: #262a33;
+  --text: #f4f5f7;
+  --muted: #9aa1ad;
+  --accent: #6366f1;
+  --accent-strong: #7c7ff5;
+  --danger: #f87171;
+  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Helvetica Neue', sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  height: 100%;
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+}
+
+body {
+  background:
+    radial-gradient(60rem 40rem at 50% 38%, rgba(99, 102, 241, 0.12), transparent 70%),
+    var(--bg);
+  -webkit-user-select: none;
+  user-select: none;
+  cursor: default;
+}
+
+.stage {
+  min-height: 100%;
+  display: flex;
+  padding: 48px 24px;
+}
+
+/* margin: auto centres the content but, unlike justify-content, never clips it when it overflows. */
+.content {
+  margin: auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 28px;
+  width: min(640px, 100%);
+}
+
+.mark {
+  width: 96px;
+  height: 128px;
+  filter: drop-shadow(0 0 18px rgba(99, 102, 241, 0.55)) drop-shadow(0 0 42px rgba(168, 85, 247, 0.25));
+}
+
+.mark-spark {
+  transform-origin: 60px 80px;
+  animation: twinkle 2.4s ease-in-out infinite;
+}
+
+@keyframes twinkle {
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.7;
+    transform: scale(0.86);
+  }
+}
+
+.panel {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 12px;
+  width: min(640px, 100%);
+}
+
+.panel[hidden] {
+  display: none;
+}
+
+h1 {
+  margin: 0;
+  font-size: 28px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.status {
+  margin: 0;
+  color: var(--muted);
+  font-size: 15px;
+}
+
+.progress {
+  position: relative;
+  width: 180px;
+  height: 3px;
+  margin-top: 8px;
+  overflow: hidden;
+  border-radius: 3px;
+  background: var(--border);
+}
+
+.progress span {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 40%;
+  border-radius: 3px;
+  background: linear-gradient(90deg, #38bdf8, #6366f1, #a855f7);
+  animation: slide 1.4s ease-in-out infinite;
+}
+
+@keyframes slide {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(250%);
+  }
+}
+
+.failed {
+  align-items: stretch;
+  text-align: left;
+  padding: 28px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  -webkit-user-select: text;
+  user-select: text;
+  cursor: auto;
+}
+
+.failed h1 {
+  font-size: 22px;
+  color: var(--text);
+}
+
+.message {
+  margin: 0;
+  font-size: 15px;
+  line-height: 1.5;
+  color: #e5e7eb;
+}
+
+.log-line {
+  margin: 0;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+code,
+pre {
+  font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+  font-size: 12px;
+}
+
+code {
+  color: #c7d2fe;
+  word-break: break-all;
+}
+
+details {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: #0f1116;
+}
+
+details[hidden] {
+  display: none;
+}
+
+summary {
+  padding: 10px 12px;
+  font-size: 13px;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+pre {
+  margin: 0;
+  max-height: 240px;
+  overflow: auto;
+  padding: 0 12px 12px;
+  color: #d1d5db;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 8px;
+}
+
+.button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 34px;
+  padding: 0 16px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: #1c1f27;
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 500;
+  text-decoration: none;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+.button:hover {
+  background: #232733;
+}
+
+.button:focus-visible {
+  outline: 2px solid var(--accent-strong);
+  outline-offset: 2px;
+}
+
+.button.primary {
+  border-color: transparent;
+  background: var(--accent);
+}
+
+.button.primary:hover {
+  background: var(--accent-strong);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mark-spark,
+  .progress span {
+    animation: none;
+  }
+}

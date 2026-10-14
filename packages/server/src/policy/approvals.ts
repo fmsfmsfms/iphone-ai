@@ -19,6 +19,8 @@ export interface ApprovalInput {
   reasons: string[];
   frameSeq?: number | null;
   timeoutSec: number;
+  /** Called with the request id as soon as the request exists (before the decision). */
+  onCreated?: (id: string) => void;
 }
 
 interface Pending {
@@ -75,6 +77,7 @@ export class ApprovalBroker {
       note: null,
     };
     this.insert(request);
+    input.onCreated?.(request.id);
     this.hub.publish({ type: 'approval_requested', approval: request });
     this.activity.record({
       category: 'approval',
@@ -89,16 +92,17 @@ export class ApprovalBroker {
     });
 
     return new Promise<ApprovalStatus>((resolve) => {
-      if (signal?.aborted) {
-        this.finish(request.id, 'cancelled', 'system', 'Task stopped before approval');
-        resolve('cancelled');
-        return;
-      }
       const timer = setTimeout(() => {
         this.finish(request.id, 'expired', 'system', null);
       }, input.timeoutSec * 1000);
       timer.unref();
+      // Register first so every path (including an already-aborted signal) goes
+      // through finish(): row updated, approval_resolved published, audited.
       this.pending.set(request.id, { request, resolve, timer });
+      if (signal?.aborted) {
+        this.finish(request.id, 'cancelled', 'system', 'Task stopped before approval');
+        return;
+      }
       signal?.addEventListener(
         'abort',
         () => {

@@ -1,0 +1,22 @@
+[package]
+name = "iphone-ai"
+version = "0.1.0"
+description = "iPhone AI desktop shell: starts the bundled Node.js backend and hosts its UI."
+edition = "2021"
+rust-version = "1.90"
+publish = false
+
+[build-dependencies]
+tauri-build = { version = "2.7", features = [] }
+
+[dependencies]
+# No plugins: the window only loads the local backend and never gets IPC commands.
+tauri = { version = "2.12", features = [] }
+serde_json = "1"
+libc = "0.2"
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = "s"
+strip = true

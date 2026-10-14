@@ -1,0 +1,7 @@
+# Build output and generated files
+/target/
+/gen/schemas
+
+# Staged by `pnpm package:mac` (node runtime, server bundle, web build, Claude Code binary)
+/binaries/
+/resources/

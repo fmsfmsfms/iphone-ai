@@ -1,0 +1,67 @@
+<!doctype html>
+<!--
+  Local page embedded in the shell (build.frontendDist). Shows "Starting…"
+  until the backend is ready, and the start-up error page when it is not.
+  State comes from the URL fragment set by the shell (src-tauri/src/pages.rs);
+  the error actions are plain links the shell intercepts — no IPC.
+-->
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="dark" />
+    <title>iPhone AI</title>
+    <link rel="stylesheet" href="splash.css" />
+    <script src="splash.js" defer></script>
+  </head>
+  <body>
+    <main class="stage">
+      <div class="content">
+        <svg class="mark" viewBox="0 0 120 160" aria-hidden="true">
+          <defs>
+            <linearGradient id="edge" x1="0" y1="0" x2="1" y2="1">
+              <stop offset="0" stop-color="#38bdf8" />
+              <stop offset="0.5" stop-color="#6366f1" />
+              <stop offset="1" stop-color="#a855f7" />
+            </linearGradient>
+            <linearGradient id="spark" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0" stop-color="#ffffff" />
+              <stop offset="1" stop-color="#e9d5ff" />
+            </linearGradient>
+          </defs>
+          <rect class="mark-body" x="22" y="10" width="76" height="140" rx="18" fill="none" stroke="url(#edge)" stroke-width="6" />
+          <rect x="49" y="19" width="22" height="6" rx="3" fill="url(#edge)" />
+          <path
+            class="mark-spark"
+            d="M60 56 Q63 77 82 80 Q63 83 60 104 Q57 83 38 80 Q57 77 60 56 Z"
+            fill="url(#spark)"
+          />
+          <path d="M79 44 Q80 51 87 52 Q80 53 79 60 Q78 53 71 52 Q78 51 79 44 Z" fill="url(#spark)" opacity="0.8" />
+        </svg>
+
+        <section id="starting" class="panel" aria-live="polite">
+          <h1>iPhone AI</h1>
+          <p id="starting-status" class="status">Starting iPhone AI…</p>
+          <div class="progress" aria-hidden="true"><span></span></div>
+        </section>
+
+        <section id="failed" class="panel failed" role="alert" hidden>
+          <h1 id="error-title">iPhone AI couldn’t start</h1>
+          <p id="error-message" class="message"></p>
+          <p class="log-line">
+            Log file: <code id="error-log"></code>
+          </p>
+          <details id="error-output-box">
+            <summary>Recent backend output</summary>
+            <pre id="error-output"></pre>
+          </details>
+          <nav class="actions" aria-label="Recovery">
+            <a id="retry" class="button primary" href="/__shell/retry">Try Again</a>
+            <a class="button" href="/__shell/reveal-log">Show Log in Finder</a>
+            <a class="button" href="/__shell/quit">Quit</a>
+          </nav>
+        </section>
+      </div>
+    </main>
+  </body>
+</html>

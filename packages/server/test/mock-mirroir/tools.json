@@ -1,0 +1,867 @@
+[
+  {
+    "name": "calibrate_component",
+    "description": "Test a component definition (.md file) against the current iPhone screen. OCRs the screen, runs component detection with the given definition, and returns a full diagnostic report showing what matched, what didn't, and why. Use this to validate and debug component definitions without running a full exploration.",
+    "inputSchema": {
+      "required": [
+        "component_path"
+      ],
+      "properties": {
+        "target": {
+          "type": "string",
+          "description": "Target name for multi-target setups (optional)"
+        },
+        "component_path": {
+          "type": "string",
+          "description": "Path to a .md component definition file"
+        },
+        "scroll": {
+          "type": "boolean",
+          "description": "Scroll through the full page to collect all elements (default: false)"
+        }
+      },
+      "type": "object"
+    }
+  },
+  {
+    "name": "check_health",
+    "description": "Run a comprehensive health check of the iPhone Mirroring setup. Checks mirroring window state, screen capture availability, and accessibility permissions. Use this to diagnose setup issues in a single call.",
+    "inputSchema": {
+      "properties": {},
+      "type": "object"
+    }
+  },
+  {
+    "name": "classify_screen",
+    "description": "Group the current screen's OCR elements into UI components using an AI model. Returns each detected component, its definition, and the elements it covers. Use this to see how a screen decomposes before writing component definitions or running an exploration.",
+    "inputSchema": {
+      "properties": {
+        "target": {
+          "description": "Target name for multi-target setups (optional)",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    }
+  },
+  {
+    "name": "describe_screen",
+    "description": "Analyze the iPhone screen using OCR and return all visible text elements with their exact tap coordinates. Use this instead of visually estimating positions from screenshots. Returns both a structured text list of elements and the screenshot image. Coordinates are in the same point system as the tap tool (0,0 = top-left of mirroring window). Set scroll to true to scroll through the full page and collect all elements with page-absolute Y coordinates.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "scroll": {
+          "type": "boolean",
+          "description": "Scroll through the full page to collect all elements with page-absolute Y coordinates (default: false)"
+        },
+        "omit_screenshot": {
+          "type": "boolean",
+          "description": "Omit the screenshot image from the response to save context window space (default: uses MIRROIR_OMIT_SCREENSHOT env var, or false)"
+        }
+      }
+    }
+  },
+  {
+    "name": "double_tap",
+    "description": "Double-tap at a specific position on the mirrored iPhone screen. Performs two rapid taps for gestures like zoom, text selection, and widget activation. Coordinates are relative to the iPhone Mirroring window.",
+    "inputSchema": {
+      "properties": {
+        "cursor_mode": {
+          "enum": [
+            "direct",
+            "preserving"
+          ],
+          "description": "Cursor management: 'direct' leaves cursor at target, 'preserving' restores cursor to its original position after the operation. Defaults to 'direct' for iPhone Mirroring, 'preserving' for generic windows.",
+          "type": "string"
+        },
+        "x": {
+          "description": "X coordinate relative to the mirroring window (0 = left edge)",
+          "type": "number"
+        },
+        "y": {
+          "description": "Y coordinate relative to the mirroring window (0 = top edge)",
+          "type": "number"
+        }
+      },
+      "required": [
+        "x",
+        "y"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "name": "drag",
+    "description": "Drag from one point to another on the mirrored iPhone screen with sustained contact. Unlike swipe (quick flick), drag is a slow deliberate movement for rearranging icons, adjusting sliders, and drag-and-drop operations. Coordinates are relative to the iPhone Mirroring window.",
+    "inputSchema": {
+      "type": "object",
+      "required": [
+        "from_x",
+        "from_y",
+        "to_x",
+        "to_y"
+      ],
+      "properties": {
+        "to_x": {
+          "type": "number",
+          "description": "End X coordinate"
+        },
+        "cursor_mode": {
+          "enum": [
+            "direct",
+            "preserving"
+          ],
+          "description": "Cursor management: 'direct' leaves cursor at target, 'preserving' restores cursor to its original position after the operation. Defaults to 'direct' for iPhone Mirroring, 'preserving' for generic windows.",
+          "type": "string"
+        },
+        "from_y": {
+          "type": "number",
+          "description": "Start Y coordinate"
+        },
+        "to_y": {
+          "type": "number",
+          "description": "End Y coordinate"
+        },
+        "from_x": {
+          "description": "Start X coordinate",
+          "type": "number"
+        },
+        "duration_ms": {
+          "type": "number",
+          "description": "Duration of drag in milliseconds (default: 1000, minimum: 200)"
+        }
+      }
+    }
+  },
+  {
+    "name": "generate_skill",
+    "description": "Generate a SKILL.md by exploring an app. Session-based workflow: (1) action=\"start\" — launch app + OCR. (2) Navigate with tap/swipe/type_text, then action=\"capture\" per screen. (3) action=\"finish\" — emit SKILL.md. Use action=\"explore\" for autonomous exploration (BFS default, or DFS). Set fresh=true to discard persisted graph and explore from scratch. WARNING: Exploration steals Mac keyboard focus (global HID events). SECURITY: May navigate into sensitive screens. Do not run unattended.",
+    "inputSchema": {
+      "required": [
+        "action"
+      ],
+      "properties": {
+        "goals": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array",
+          "description": "Optional array of goals for manifest mode. Each goal is explored in sequence, producing one SKILL.md per goal."
+        },
+        "arrived_via": {
+          "type": "string",
+          "description": "Element tapped to reach current screen, e.g. \"General\" (for capture action)."
+        },
+        "seed": {
+          "description": "Seed for deterministic exploration ordering. Same seed produces identical exploration sequences.",
+          "type": "integer"
+        },
+        "action": {
+          "enum": [
+            "start",
+            "capture",
+            "finish",
+            "explore"
+          ],
+          "description": "Session action: \"start\" to launch app and begin, \"capture\" to OCR current screen and append, \"finish\" to generate SKILL.md from all captures, \"explore\" for autonomous exploration (BFS or DFS).",
+          "type": "string"
+        },
+        "max_screens": {
+          "type": "integer",
+          "description": "Maximum screens to visit for explore action (default: 30)."
+        },
+        "output_dir": {
+          "type": "string",
+          "description": "Consumer repo root the emit=true tree is written under (<output_dir>/.mirroir/apps/<app>/). Defaults to walking up from the working directory; emitting into ~/.mirroir is refused."
+        },
+        "fresh": {
+          "description": "When true, discard any persisted navigation graph and explore from scratch. Default: true. Set false for incremental exploration.",
+          "type": "boolean"
+        },
+        "app_name": {
+          "description": "App to explore (required for start action).",
+          "type": "string"
+        },
+        "action_type": {
+          "description": "Action performed to reach current screen: \"tap\", \"swipe\", \"type\", \"press_key\", \"scroll_to\", \"long_press\", \"remember\", \"screenshot\", \"press_home\", \"open_url\" (for capture action).",
+          "type": "string"
+        },
+        "goal": {
+          "type": "string",
+          "description": "Optional flow description, e.g. \"check software version\" (for start action). Omit for discovery mode."
+        },
+        "emit": {
+          "description": "When true on the finish or explore action, write a runnable .mirroir/apps/<app>/ iOS leg into the consumer repo: the captured walk as a target: { kind: ios } scenario, a SAMPLE.md declaring it, and a must_pass plan entry — mirroir-run replays it through mirroir-mcp test on macOS. Default: false.",
+          "type": "boolean"
+        },
+        "explorer": {
+          "enum": [
+            "bfs",
+            "dfs"
+          ],
+          "description": "Exploration algorithm: \"bfs\" (breadth-first, default) or \"dfs\" (depth-first).",
+          "type": "string"
+        },
+        "strategy": {
+          "enum": [
+            "mobile",
+            "social",
+            "desktop"
+          ],
+          "description": "Override exploration strategy: \"mobile\" (default), \"social\" (Reddit, Instagram, TikTok), \"desktop\" (generic macOS windows). Auto-detected from target type and app name if omitted.",
+          "type": "string"
+        },
+        "max_time": {
+          "description": "Maximum seconds for explore action (default: 300).",
+          "type": "integer"
+        },
+        "max_depth": {
+          "type": "integer",
+          "description": "Maximum BFS depth for explore action (default: 6)."
+        },
+        "skip_calibration": {
+          "type": "boolean",
+          "description": "Skip component detection and validation during calibration. Full-page scrolling still runs to discover below-fold elements. Useful with vision describers that produce clean semantic elements. Default: false."
+        }
+      },
+      "type": "object"
+    }
+  },
+  {
+    "name": "get_orientation",
+    "description": "Get the current device orientation of the mirrored iPhone. Returns \"portrait\" or \"landscape\" based on the mirroring window dimensions. Useful for adapting touch coordinates and understanding the current screen layout.",
+    "inputSchema": {
+      "properties": {},
+      "type": "object"
+    }
+  },
+  {
+    "name": "get_skill",
+    "description": "Read a skill YAML file by name and return its contents with ${VAR} placeholders resolved from environment variables. Looks in project-local directory first, then global. The AI interprets the YAML steps and executes them using existing MCP tools. Supports both YAML (.yaml) and SKILL.md (.md) formats.",
+    "inputSchema": {
+      "properties": {
+        "name": {
+          "description": "Skill name or path (e.g. 'login-flow' or 'slack/send-message')",
+          "type": "string"
+        }
+      },
+      "type": "object",
+      "required": [
+        "name"
+      ]
+    }
+  },
+  {
+    "name": "hold_keys",
+    "description": "Hold keyboard keys down for duration_ms, optionally while dragging a mouse button across the mirrored iPhone, then release everything. For games that switch to mouse/keyboard controls (e.g. Roblox): hold \"w\" to walk while a right-button drag turns the camera. Touch-only games ignore keys. Held keys repeat like a physical key; modifiers (shift, control, option, command) are held without repeating. Refused while a touch is held. Drag coordinates are relative to the mirroring window, like drag.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "duration_ms": {
+          "description": "How long to hold, in milliseconds (100-10000, default: 1000)",
+          "type": "number"
+        },
+        "keys": {
+          "description": "Keys to hold (1-6): single characters typed without modifiers (\"w\", \"a\", \"1\"), modifiers (shift, command, option, control), or named keys (delete, down, escape, left, return, right, space, tab, up)",
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "maxItems": 6
+        },
+        "drag": {
+          "description": "Optional mouse-button drag performed over the same duration while the keys are held",
+          "type": "object",
+          "required": [
+            "from_x",
+            "from_y",
+            "to_x",
+            "to_y"
+          ],
+          "properties": {
+            "to_y": {
+              "type": "number",
+              "description": "Drag end Y, relative to the mirroring window"
+            },
+            "from_y": {
+              "type": "number",
+              "description": "Drag start Y, relative to the mirroring window"
+            },
+            "from_x": {
+              "type": "number",
+              "description": "Drag start X, relative to the mirroring window"
+            },
+            "button": {
+              "type": "string",
+              "enum": [
+                "left",
+                "right"
+              ],
+              "description": "Mouse button to hold (default: left). Games with mouse controls usually turn the camera with right."
+            },
+            "to_x": {
+              "type": "number",
+              "description": "Drag end X, relative to the mirroring window"
+            }
+          }
+        }
+      },
+      "required": [
+        "keys"
+      ]
+    }
+  },
+  {
+    "name": "launch_app",
+    "description": "Launch an app on the mirrored iPhone by name using Spotlight search. Opens Spotlight, types the app name, and presses Return to launch the top result. The app name should match the display name shown on the iPhone home screen.",
+    "inputSchema": {
+      "properties": {
+        "name": {
+          "description": "The app name to search for and launch",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "name": "list_skills",
+    "description": "List all available test skills from both project-local and global config directories. Returns skill names and descriptions extracted from YAML files in <cwd>/.mirroir-mcp/skills/ and ~/.mirroir-mcp/skills/. Project-local skills with the same filename override global ones.",
+    "inputSchema": {
+      "properties": {},
+      "type": "object"
+    }
+  },
+  {
+    "name": "list_targets",
+    "description": "Lists all configured targets with status, window size, and which is active. Targets are window automation endpoints (iPhone Mirroring, Android emulators, etc.).",
+    "inputSchema": {
+      "type": "object",
+      "properties": {}
+    }
+  },
+  {
+    "name": "long_press",
+    "description": "Long press at a specific position on the mirrored iPhone screen. Holds the tap for a configurable duration (default 500ms). Use for context menus, drag initiation, and any gesture that requires holding a touch. Coordinates are relative to the iPhone Mirroring window.",
+    "inputSchema": {
+      "required": [
+        "x",
+        "y"
+      ],
+      "properties": {
+        "duration_ms": {
+          "description": "Hold duration in milliseconds (default: 500, minimum: 100)",
+          "type": "number"
+        },
+        "cursor_mode": {
+          "description": "Cursor management: 'direct' leaves cursor at target, 'preserving' restores cursor to its original position after the operation. Defaults to 'direct' for iPhone Mirroring, 'preserving' for generic windows.",
+          "type": "string",
+          "enum": [
+            "direct",
+            "preserving"
+          ]
+        },
+        "x": {
+          "description": "X coordinate relative to the mirroring window (0 = left edge)",
+          "type": "number"
+        },
+        "y": {
+          "type": "number",
+          "description": "Y coordinate relative to the mirroring window (0 = top edge)"
+        }
+      },
+      "type": "object"
+    }
+  },
+  {
+    "name": "measure",
+    "description": "Measure the time between performing an action and a target element appearing on screen. Executes the action (tap, launch, etc.), then polls OCR until the target label is visible. Reports the measured duration and optionally fails if it exceeds a maximum threshold.",
+    "inputSchema": {
+      "properties": {
+        "action": {
+          "description": "Action to perform: 'tap:Label', 'launch:AppName', or 'press_key:return'",
+          "type": "string"
+        },
+        "name": {
+          "description": "Name for this measurement (for reporting). Optional.",
+          "type": "string"
+        },
+        "until": {
+          "description": "Text label to wait for after the action",
+          "type": "string"
+        },
+        "max_seconds": {
+          "description": "Maximum allowed seconds (fails if exceeded). Optional.",
+          "type": "number"
+        }
+      },
+      "required": [
+        "action",
+        "until"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "name": "open_url",
+    "description": "Open a URL in Safari on the mirrored iPhone. Launches Safari, selects the address bar, types the URL, and navigates to it. Works with any URL including http, https, and deep links.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "url": {
+          "type": "string",
+          "description": "The URL to open (e.g., https://example.com)"
+        }
+      },
+      "required": [
+        "url"
+      ]
+    }
+  },
+  {
+    "name": "pinch",
+    "description": "Two-finger pinch centred at (x, y) on the mirrored iPhone. scale > 1 spreads the fingers (zoom in), scale < 1 pinches them together (zoom out); the distance between the fingers ends at exactly scale times its start (0.1 to 10.0). It reaches iOS as a UIKit two-finger gesture, so it works with gesture recognizers such as Maps and Photos; games that read raw touches may ignore it. Needs a Mac with a built-in trackpad or a Magic Trackpad. Refused while a touch is held. Coordinates are relative to the mirroring window, like tap.",
+    "inputSchema": {
+      "required": [
+        "x",
+        "y",
+        "scale"
+      ],
+      "properties": {
+        "duration_ms": {
+          "type": "number",
+          "description": "Gesture duration in milliseconds (100-5000, default: 500)"
+        },
+        "y": {
+          "description": "Y coordinate of the gesture centre, relative to the mirroring window",
+          "type": "number"
+        },
+        "scale": {
+          "type": "number",
+          "description": "Finger spread multiplier: > 1 zooms in, < 1 zooms out (0.1 to 10.0, not 1)"
+        },
+        "x": {
+          "description": "X coordinate of the gesture centre, relative to the mirroring window",
+          "type": "number"
+        }
+      },
+      "type": "object"
+    }
+  },
+  {
+    "name": "press_app_switcher",
+    "description": "Open the App Switcher on the mirrored iPhone, showing recently used apps. From here you can swipe between apps or swipe up to close them.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {}
+    }
+  },
+  {
+    "name": "press_back",
+    "description": "Navigate back one screen on the mirrored iPhone by tapping the \"<\" back chevron in the top navigation bar. Uses OCR to locate the chevron and falls back to the canonical back-button position if OCR misses it. This is the only reliable back-navigation method for iPhone Mirroring — Mac keyboard shortcuts (Cmd+[) do NOT pass through to iOS apps.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {}
+    }
+  },
+  {
+    "name": "press_home",
+    "description": "Press the Home button on the mirrored iPhone, returning to the home screen. Equivalent to swiping up from the bottom on a Face ID device.",
+    "inputSchema": {
+      "properties": {},
+      "type": "object"
+    }
+  },
+  {
+    "name": "press_key",
+    "description": "Send a key press to the mirrored iPhone with optional modifiers. Automatically activates the iPhone Mirroring window if needed (one-time Space switch). Supported keys: return, escape, tab, delete, space, up, down, left, right, or any single character (a-z, 0-9, etc.) for shortcuts. Optional modifiers: command, shift, option, control. Examples: press Return to confirm, Escape to cancel, Ctrl+Cmd+Z for shake.",
+    "inputSchema": {
+      "required": [
+        "key"
+      ],
+      "type": "object",
+      "properties": {
+        "modifiers": {
+          "type": "array",
+          "description": "Optional modifier keys: command, shift, option, control",
+          "items": {
+            "type": "string"
+          }
+        },
+        "key": {
+          "type": "string",
+          "description": "Key name: return, escape, tab, delete, space, up, down, left, right, or a single character"
+        }
+      }
+    }
+  },
+  {
+    "name": "record_step",
+    "description": "Record a compiled step during AI-driven skill execution. Call this after each skill step with the step index, type, label, and any observed data (coordinates, timing, scroll count). The server accumulates steps for later saving via save_compiled.",
+    "inputSchema": {
+      "required": [
+        "step_index",
+        "type"
+      ],
+      "type": "object",
+      "properties": {
+        "scroll_direction": {
+          "description": "Scroll direction: up, down, left, right (for scroll_to). Optional.",
+          "type": "string"
+        },
+        "confidence": {
+          "description": "OCR match confidence (0.0-1.0). Optional.",
+          "type": "number"
+        },
+        "elapsed_ms": {
+          "description": "Time waited in milliseconds (for wait_for, assert, measure). Optional.",
+          "type": "integer"
+        },
+        "tap_x": {
+          "description": "Tap X coordinate from describe_screen. Optional.",
+          "type": "number"
+        },
+        "match_strategy": {
+          "description": "How the element was matched (exact, contains, etc.). Optional.",
+          "type": "string"
+        },
+        "step_index": {
+          "description": "Step index in the skill (0-based)",
+          "type": "integer"
+        },
+        "scroll_count": {
+          "description": "Number of scrolls performed (for scroll_to). Optional.",
+          "type": "integer"
+        },
+        "type": {
+          "description": "Step type (tap, wait_for, launch, type, press_key, swipe, scroll_to, assert_visible, assert_not_visible, home, open_url, shake, reset_app, set_network, screenshot, switch_target, measure)",
+          "type": "string"
+        },
+        "label": {
+          "description": "Human-readable label from the step. Optional.",
+          "type": "string"
+        },
+        "tap_y": {
+          "description": "Tap Y coordinate from describe_screen. Optional.",
+          "type": "number"
+        }
+      }
+    }
+  },
+  {
+    "name": "reset_app",
+    "description": "Force-quit an app on the mirrored iPhone by launching it via Spotlight (which handles localization), opening the App Switcher where the just-launched app is the centered card, and swiping it up to dismiss. Use this before launch_app to ensure a fresh start.",
+    "inputSchema": {
+      "type": "object",
+      "required": [
+        "name"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "The app name to force-quit"
+        }
+      }
+    }
+  },
+  {
+    "name": "rotate",
+    "description": "Two-finger rotation centred at (x, y) on the mirrored iPhone by degrees: positive turns counter-clockwise, negative clockwise (up to 360 either way). It reaches iOS as a UIKit two-finger gesture, so it works with gesture recognizers such as Maps and Photos; games that read raw touches may ignore it. Needs a Mac with a built-in trackpad or a Magic Trackpad. Refused while a touch is held. Coordinates are relative to the mirroring window, like tap.",
+    "inputSchema": {
+      "type": "object",
+      "required": [
+        "x",
+        "y",
+        "degrees"
+      ],
+      "properties": {
+        "duration_ms": {
+          "description": "Gesture duration in milliseconds (100-5000, default: 500)",
+          "type": "number"
+        },
+        "y": {
+          "description": "Y coordinate of the gesture centre, relative to the mirroring window",
+          "type": "number"
+        },
+        "degrees": {
+          "description": "Rotation in degrees: positive counter-clockwise, negative clockwise (non-zero, at most 360 either way)",
+          "type": "number"
+        },
+        "x": {
+          "description": "X coordinate of the gesture centre, relative to the mirroring window",
+          "type": "number"
+        }
+      }
+    }
+  },
+  {
+    "name": "save_compiled",
+    "description": "Save the accumulated compiled steps as a .compiled.json file next to the source skill file. Call this after all record_step calls are done. Clears the compilation session afterward.",
+    "inputSchema": {
+      "required": [
+        "skill_name"
+      ],
+      "type": "object",
+      "properties": {
+        "skill_name": {
+          "type": "string",
+          "description": "Skill name or path to resolve (e.g. 'check-about' or 'apps/settings/check-about')"
+        }
+      }
+    }
+  },
+  {
+    "name": "screenshot",
+    "description": "Capture a screenshot of the iPhone Mirroring window. Returns the current screen content as a PNG image. Use this to see what is displayed on the mirrored iPhone.\n\nBy default the capture waits for the screen to stop changing, because the mirrored frame lags the device: a capture taken immediately after an action can still show the pre-action screen. Never retry an action that \"looks like a no-op\" — the first one landed, so the retry fires on the next screen and mis-taps. Use settle_ms to tune the wait, or 0 to disable it.",
+    "inputSchema": {
+      "properties": {
+        "settle_ms": {
+          "description": "How long to wait for two consecutive identical frames before returning, in milliseconds. 0 returns the first frame immediately, which may be stale. Defaults to the frameSettleTimeoutUs setting.",
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    }
+  },
+  {
+    "name": "scroll_to",
+    "description": "Scroll in a direction until a target text element becomes visible on the mirrored iPhone screen. Uses OCR to detect the element after each scroll. Stops early if the screen content stops changing (scroll exhaustion). Direction \"up\" means swipe up (scroll content down).",
+    "inputSchema": {
+      "properties": {
+        "max_scrolls": {
+          "description": "Maximum number of scroll attempts before giving up (default: 10)",
+          "type": "integer"
+        },
+        "direction": {
+          "enum": [
+            "up",
+            "down",
+            "left",
+            "right"
+          ],
+          "description": "Scroll direction (default: up). 'up' = swipe up = scroll content down.",
+          "type": "string"
+        },
+        "label": {
+          "description": "Text to find on screen via OCR",
+          "type": "string"
+        }
+      },
+      "type": "object",
+      "required": [
+        "label"
+      ]
+    }
+  },
+  {
+    "name": "set_network",
+    "description": "Toggle network settings on the mirrored iPhone by navigating to the Settings app and tapping the appropriate control. Supported modes: airplane_on, airplane_off, wifi_on, wifi_off, cellular_on, cellular_off. After toggling, returns to the home screen.",
+    "inputSchema": {
+      "type": "object",
+      "required": [
+        "mode"
+      ],
+      "properties": {
+        "mode": {
+          "description": "Network mode to set: airplane_on/off, wifi_on/off, cellular_on/off",
+          "enum": [
+            "airplane_on",
+            "airplane_off",
+            "wifi_on",
+            "wifi_off",
+            "cellular_on",
+            "cellular_off"
+          ],
+          "type": "string"
+        }
+      }
+    }
+  },
+  {
+    "name": "shake",
+    "description": "Trigger a shake gesture on the mirrored iPhone. Sends Ctrl+Cmd+Z which triggers shake-to-undo in iOS apps. Useful for: Expo Go developer menu, React Native debug menu, undo actions, and any app that responds to device shake.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {}
+    }
+  },
+  {
+    "name": "spotlight",
+    "description": "Open Spotlight search on the mirrored iPhone. After opening, use type_text to enter a search query.",
+    "inputSchema": {
+      "properties": {},
+      "type": "object"
+    }
+  },
+  {
+    "name": "start_recording",
+    "description": "Start recording a video of the mirrored iPhone screen. Records the iPhone Mirroring window as a .mov file. Use stop_recording to end the recording and get the file path. Requires Screen Recording permission in System Preferences.",
+    "inputSchema": {
+      "properties": {
+        "output_path": {
+          "type": "string",
+          "description": "Optional file path for the recording (default: temp directory)"
+        }
+      },
+      "type": "object"
+    }
+  },
+  {
+    "name": "status",
+    "description": "Get the current status of the iPhone Mirroring connection. Returns whether the app is running, connected, paused, or has no window.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {}
+    }
+  },
+  {
+    "name": "stop_recording",
+    "description": "Stop the current video recording and return the file path. Must be called after start_recording. Returns the path to the recorded .mov file.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {}
+    }
+  },
+  {
+    "name": "swipe",
+    "description": "Perform a swipe gesture on the mirrored iPhone screen. Coordinates are relative to the iPhone Mirroring window. Content follows the finger: swipe up (scroll down), swipe down (scroll up), swipe left to reveal content on the right. Fast swipes (short duration_ms) end with flick momentum, so paging surfaces like video feeds snap to the next page; use a long duration_ms for a slow precise scroll without inertia.",
+    "inputSchema": {
+      "required": [
+        "from_x",
+        "from_y",
+        "to_x",
+        "to_y"
+      ],
+      "type": "object",
+      "properties": {
+        "cursor_mode": {
+          "enum": [
+            "direct",
+            "preserving"
+          ],
+          "type": "string",
+          "description": "Cursor management: 'direct' leaves cursor at target, 'preserving' restores cursor to its original position after the operation. Defaults to 'direct' for iPhone Mirroring, 'preserving' for generic windows."
+        },
+        "to_x": {
+          "type": "number",
+          "description": "End X coordinate"
+        },
+        "from_x": {
+          "type": "number",
+          "description": "Start X coordinate"
+        },
+        "to_y": {
+          "type": "number",
+          "description": "End Y coordinate"
+        },
+        "from_y": {
+          "type": "number",
+          "description": "Start Y coordinate"
+        },
+        "duration_ms": {
+          "type": "number",
+          "description": "Duration of swipe in milliseconds (default: 300)"
+        }
+      }
+    }
+  },
+  {
+    "name": "switch_target",
+    "description": "Changes the active target for subsequent calls. Use list_targets to see available targets.",
+    "inputSchema": {
+      "required": [
+        "target"
+      ],
+      "properties": {
+        "target": {
+          "description": "Name of the target to switch to",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    }
+  },
+  {
+    "name": "tap",
+    "description": "Tap at a specific position on the mirrored iPhone screen. Coordinates are relative to the iPhone Mirroring window (0,0 is top-left of the mirrored content). Use screenshot first to identify element positions.",
+    "inputSchema": {
+      "required": [
+        "x",
+        "y"
+      ],
+      "type": "object",
+      "properties": {
+        "x": {
+          "type": "number",
+          "description": "X coordinate relative to the mirroring window (0 = left edge)"
+        },
+        "y": {
+          "type": "number",
+          "description": "Y coordinate relative to the mirroring window (0 = top edge)"
+        },
+        "cursor_mode": {
+          "type": "string",
+          "enum": [
+            "direct",
+            "preserving"
+          ],
+          "description": "Cursor management: 'direct' leaves cursor at target, 'preserving' restores cursor to its original position after the operation. Defaults to 'direct' for iPhone Mirroring, 'preserving' for generic windows."
+        }
+      }
+    }
+  },
+  {
+    "name": "touch",
+    "description": "Hold one finger on the mirrored iPhone across calls. action \"begin\" presses at (x, y) and keeps it down; \"move\" slides the held finger to (x, y) over duration_ms; \"end\" lifts it; \"cancel\" always releases the button, held or not. Use it for joysticks, sustained drags, and anything that needs a finger to stay down between other calls. While a touch is held, tap, swipe, drag, long_press and double_tap refuse until it is ended or cancelled. A touch idle for 30s is released automatically. Coordinates are relative to the mirroring window, like tap.",
+    "inputSchema": {
+      "required": [
+        "action"
+      ],
+      "type": "object",
+      "properties": {
+        "y": {
+          "type": "number",
+          "description": "Y coordinate relative to the mirroring window (begin, move)"
+        },
+        "x": {
+          "type": "number",
+          "description": "X coordinate relative to the mirroring window (begin, move)"
+        },
+        "action": {
+          "type": "string",
+          "description": "begin | move | end | cancel",
+          "enum": [
+            "begin",
+            "move",
+            "end",
+            "cancel"
+          ]
+        },
+        "duration_ms": {
+          "type": "number",
+          "description": "Duration of a move in milliseconds, 1-5000 (default: 100)"
+        }
+      }
+    }
+  },
+  {
+    "name": "type_text",
+    "description": "Type text on the mirrored iPhone. Automatically activates the iPhone Mirroring window if needed (one-time Space switch). A text field must be active on the iPhone. Sends keystrokes through the CGEvent keyboard interface with automatic keyboard layout translation for non-US layouts.",
+    "inputSchema": {
+      "properties": {
+        "text": {
+          "type": "string",
+          "description": "The text to type"
+        }
+      },
+      "required": [
+        "text"
+      ],
+      "type": "object"
+    }
+  }
+]
