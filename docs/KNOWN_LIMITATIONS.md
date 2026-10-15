@@ -27,6 +27,10 @@
 - **`open_url` is unsupported** for the iPhone target (Mirroir refuses it). The AI opens
   Safari and types the address instead.
 - **`press_back` always reports success** in Mirroir; iPhone AI verifies by re-observing.
+- **Hovering iPhone Mirroring reads as "paused".** While the iPhone Mirroring window is active
+  under the pointer it shows its own toolbar buttons, and Mirroir 0.40.1 reports the session
+  as paused until they hide (usually 0.25–4 s, once ~6 s); input is refused meanwhile. Keep the pointer in
+  iPhone AI while the AI works.
 - **The iPhone must stay locked.** iPhone Mirroring pauses or ends the session when the
   iPhone is unlocked or used, and after a few idle minutes. Lock the iPhone, keep it
   nearby, then resume.
@@ -43,6 +47,9 @@
 
 ## Safety-policy trade-offs
 
+- After an approval the screen is checked again. Text that changes on its own away from where
+  it was (e.g. "Arriving in 12 min" ticking to "11 min", or new captions under video) cancels an
+  approved tap or key press, and the AI asks again. This fails safe by design.
 - In Supervised mode, pressing Return or tapping an unlabeled/"Send"-like control after
   typing requires approval — even for harmless searches — because the same gesture sends
   messages and submits forms.

@@ -2,12 +2,13 @@
 // lifecycle, driven by a FAKE helper (test/live-capture/fake-capture-helper.mjs)
 // that speaks the exact framed protocol. No ScreenCaptureKit, no window, no phone.
 
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { LIVE_CONFLICT_ERROR, type MirroringState, type PolicyDecision } from '@iphone-ai/shared';
+import { LIVE_CONFLICT_ERROR, type DeviceStatus, type MirroringState, type PolicyDecision } from '@iphone-ai/shared';
 
 import { EventHub } from '../../src/core/events.js';
 import { silentLogger, type Logger } from '../../src/core/logger.js';
@@ -31,8 +32,54 @@ import {
   fakeHelper,
   fakeJpeg,
   type FakeHelper,
+  type FakeHelperLogEntry,
   type FakeScenario,
 } from '../live-capture/helpers.js';
+
+const SCRIPTED_HELPER = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../live-capture/scripted-capture-helper.mjs');
+
+/**
+ * FakeLiveDevice whose status reads as freshly polled (`checkedAt` is now),
+ * unless a test holds the last reading back (a status poll waiting behind a
+ * slow Mirroir action).
+ */
+class PolledLiveDevice extends FakeLiveDevice {
+  heldReadingAt: number | null = null;
+
+  override getStatus(): DeviceStatus {
+    const status = super.getStatus();
+    return { ...status, mirroring: { ...status.mirroring, checkedAt: this.heldReadingAt ?? Date.now() } };
+  }
+}
+
+interface ScriptStep {
+  atMs: number;
+  event: 'started' | 'window' | 'waiting';
+  [field: string]: unknown;
+}
+
+/** A fake helper that also sends scripted STATUS events (test/live-capture/scripted-capture-helper.mjs). */
+function scriptedHelper(dir: string, script: ScriptStep[]): FakeHelper {
+  const scenarioFile = path.join(dir, `scripted-helper-${Math.random().toString(36).slice(2)}.json`);
+  const logFile = `${scenarioFile}.log.jsonl`;
+  writeFileSync(scenarioFile, JSON.stringify({ script }));
+  const log = (): FakeHelperLogEntry[] =>
+    existsSync(logFile)
+      ? readFileSync(logFile, 'utf8')
+          .split('\n')
+          .filter((line) => line.trim())
+          .map((line) => JSON.parse(line) as FakeHelperLogEntry)
+      : [];
+  return {
+    command: { command: process.execPath, args: [SCRIPTED_HELPER, '--scenario', scenarioFile, '--log', logFile] },
+    setScenario(next) {
+      writeFileSync(scenarioFile, JSON.stringify(next));
+    },
+    log,
+    starts: () => log().filter((e) => e.event === 'start'),
+    stdinLines: () => log().filter((e) => e.event === 'stdin').map((e) => e.line ?? ''),
+  };
+}
 
 describe('HelperStreamParser', () => {
   const status = encodeHelperStatus({ event: 'started', ptW: 410, ptH: 898, pxW: 730, pxH: 1600 });
@@ -183,7 +230,7 @@ function recordingLogger(): { log: Logger; lines: { level: string; msg: string; 
 
 interface Setup {
   c: CoreContext;
-  device: FakeLiveDevice;
+  device: PolledLiveDevice;
   helper: FakeHelper;
   live: LiveCapture;
   hub: EventHub;
@@ -191,13 +238,16 @@ interface Setup {
   frames: { seq: number; geometry: unknown }[];
 }
 
-function setup(scenario: FakeScenario = {}, options: { timings?: Partial<LiveCaptureTimings>; liveFps?: number; log?: Logger } = {}): Setup {
+function setup(
+  scenario: FakeScenario = {},
+  options: { timings?: Partial<LiveCaptureTimings>; liveFps?: number; log?: Logger; script?: ScriptStep[] } = {},
+): Setup {
   core = createCoreContext();
   if (options.liveFps) {
     core.settings.update({ connection: { screenshot: { ...core.settings.get().connection.screenshot, liveFps: options.liveFps } } });
   }
-  const device = new FakeLiveDevice();
-  const helper = fakeHelper(core.dir, scenario);
+  const device = new PolledLiveDevice();
+  const helper = options.script ? scriptedHelper(core.dir, options.script) : fakeHelper(core.dir, scenario);
   const hub = core.hub;
   live = new LiveCapture({ device, settings: core.settings, hub, log: options.log ?? silentLogger, helper: helper.command, timings: { ...FAST, ...options.timings } });
   const viewers = { count: 0 };
@@ -523,6 +573,9 @@ describe('LiveCapture lifecycle (fake helper)', () => {
 
 describe('LiveCapture conflict safety latch (fake helper, fake Mirroir status)', () => {
   const PROBE: Partial<LiveCaptureTimings> = { conflictProbeMs: 1200 };
+  /** A short conflict window, so a test can get past it quickly. */
+  const WINDOW_MS = 400;
+  const WINDOW: Partial<LiveCaptureTimings> = { ...PROBE, conflictWindowMs: WINDOW_MS };
 
   /** A status poll result, delivered the way DeviceController publishes it. */
   function setMirroring(s: Setup, state: MirroringState): void {
@@ -535,17 +588,40 @@ describe('LiveCapture conflict safety latch (fake helper, fake Mirroir status)',
     await waitFor(() => s.live.isDelivering(), { message: 'no live frames' });
   }
 
-  /** connected → paused while capturing → helper stopped → connected again within the probe window. */
-  async function latch(s: Setup): Promise<void> {
-    const starts = s.helper.starts().length;
+  /** The current helper must be capturing (frames from the previous one can still count as delivering). */
+  async function helperCapturing(s: Setup): Promise<void> {
+    await waitFor(() => s.live.stats().phase === 'capturing', { message: 'helper not capturing' });
+  }
+
+  /** connected → paused while the current helper captures → helper stopped → connected again right after. */
+  async function strike(s: Setup): Promise<void> {
+    await helperCapturing(s);
     setMirroring(s, 'paused');
     await waitFor(() => !s.live.stats().running, { message: 'helper not stopped for the conflict probe' });
     setMirroring(s, 'connected');
+  }
+
+  /** A first strike: capture is only a suspect, nothing is latched and the helper is restarted at once. */
+  async function firstStrike(s: Setup): Promise<void> {
+    await helperCapturing(s);
+    const starts = s.helper.starts().length;
+    await strike(s);
+    await waitFor(() => s.helper.starts().length === starts + 1 && s.live.stats().phase === 'capturing', {
+      message: 'helper not restarted to confirm the conflict',
+    });
+    expect(s.live.conflictLatched).toBe(false);
+  }
+
+  /** A first strike, then the same in the restarted helper session: latched off. */
+  async function latch(s: Setup): Promise<void> {
+    await firstStrike(s);
+    const starts = s.helper.starts().length;
+    await strike(s);
     await waitFor(() => s.live.conflictLatched, { message: 'conflict not latched' });
     expect(s.helper.starts()).toHaveLength(starts);
   }
 
-  it('stops the helper when Mirroir reports paused during capture and latches it off when Mirroir reports connected right after', async () => {
+  it('stops the helper on a pause right after capture started, restarts it once when Mirroir reports connected right after, and latches it off when that repeats', async () => {
     const { log, lines } = recordingLogger();
     const s = setup({}, { timings: PROBE, log });
     await capturing(s);
@@ -561,6 +637,19 @@ describe('LiveCapture conflict safety latch (fake helper, fake Mirroir status)',
     expect(s.live.conflictLatched).toBe(false);
     expect(s.device.activity).toEqual([]);
 
+    // First strike: a pause under the pointer (iPhone Mirroring's toolbar) can end
+    // the same way, so capture is only a suspect and runs again at once.
+    setMirroring(s, 'connected');
+    await waitFor(() => s.helper.starts().length === 2 && s.live.stats().phase === 'capturing', { message: 'helper not restarted to confirm the conflict' });
+    expect(s.live.conflictLatched).toBe(false);
+    expect(s.live.stats()).toMatchObject({ available: true, running: true });
+    expect(s.device.activity).toEqual([]);
+    expect(lines.filter((l) => l.level === 'warn')).toEqual([]);
+    expect(lines).toContainEqual(expect.objectContaining({ level: 'info', msg: expect.stringContaining('restarting live capture once to confirm') }));
+
+    // The same in the restarted helper session: capture caused it.
+    setMirroring(s, 'paused');
+    await waitFor(() => !s.live.stats().running, { message: 'restarted helper not stopped for the conflict probe' });
     setMirroring(s, 'connected');
     await waitFor(() => s.live.conflictLatched, { message: 'conflict not latched' });
     expect(s.live.stats()).toMatchObject({ available: false, running: false, delivering: false, error: LIVE_CONFLICT_ERROR });
@@ -568,6 +657,7 @@ describe('LiveCapture conflict safety latch (fake helper, fake Mirroir status)',
     expect(lines.filter((l) => l.level === 'warn').map((l) => l.msg)).toEqual([
       `Live capture turned off for this session: ${LIVE_CONFLICT_REASON} (polling screenshots instead)`,
     ]);
+    expect(s.helper.starts()).toHaveLength(2);
 
     // Stays off for the session: an AI task, status events and later pauses do not restart it.
     s.device.controlOwner = 'ai';
@@ -575,9 +665,35 @@ describe('LiveCapture conflict safety latch (fake helper, fake Mirroir status)',
     setMirroring(s, 'connected');
     s.live.evaluate();
     await sleep(PROBE.conflictProbeMs! + 300);
-    expect(s.helper.starts()).toHaveLength(1);
+    expect(s.helper.starts()).toHaveLength(2);
     expect(s.device.activity).toHaveLength(1);
     expect(s.live.stats().error).toBe(LIVE_CONFLICT_ERROR);
+  });
+
+  it('latches a pause that comes back every time capture starts after one confirming restart (simulated capture-induced overlay)', async () => {
+    const s = setup({}, { timings: PROBE });
+    // iPhone Mirroring adds its overlay ~150 ms into every capture while connected
+    // (Mirroir reads it as paused) and drops it once capture stops.
+    let capturingAt: number | null = null;
+    const overlay = setInterval(() => {
+      const stats = s.live.stats();
+      const capturingNow = stats.running && stats.phase === 'capturing';
+      if (capturingNow && s.device.mirroringState === 'connected') {
+        capturingAt ??= Date.now();
+        if (Date.now() - capturingAt >= 150) setMirroring(s, 'paused');
+      } else if (!stats.running && s.device.mirroringState === 'paused') {
+        capturingAt = null;
+        setMirroring(s, 'connected');
+      } else if (!capturingNow) capturingAt = null;
+    }, 20);
+    try {
+      show(s);
+      await waitFor(() => s.live.conflictLatched, { message: 'a reproducible conflict was not latched' });
+      expect(s.helper.starts()).toHaveLength(2);
+      expect(s.device.activity).toEqual([expect.objectContaining({ type: 'live.conflict' })]);
+    } finally {
+      clearInterval(overlay);
+    }
   });
 
   it('treats a pause that outlives the probe window as genuine: no latch, the helper runs again', async () => {
@@ -617,7 +733,7 @@ describe('LiveCapture conflict safety latch (fake helper, fake Mirroir status)',
     expect(lines.filter((l) => l.level === 'warn')).toEqual([]);
     expect(lines).toContainEqual(expect.objectContaining({ level: 'info', msg: expect.stringContaining('resumed by the user') }));
 
-    // A later pause that clears without a user Resume still latches.
+    // Later pauses that clear without a user Resume still latch.
     await waitFor(() => s.live.isDelivering());
     await latch(s);
   });
@@ -634,6 +750,169 @@ describe('LiveCapture conflict safety latch (fake helper, fake Mirroir status)',
     expect(s.device.activity).toEqual([]);
   });
 
+  it('does not probe a pause that starts well after capture started (iPhone Mirroring active under the pointer)', async () => {
+    const s = setup({}, { timings: WINDOW });
+    await capturing(s);
+    await sleep(WINDOW_MS + 200);
+    setMirroring(s, 'paused');
+    await sleep(300);
+    setMirroring(s, 'connected');
+    await sleep(300);
+    expect(s.helper.starts()).toHaveLength(1);
+    expect(s.live.stats()).toMatchObject({ running: true, phase: 'capturing' });
+    expect(s.live.conflictLatched).toBe(false);
+    expect(s.device.activity).toEqual([]);
+  });
+
+  it('probes a pause about 100 ms after the first frame with the same short window', async () => {
+    const s = setup({}, { timings: WINDOW });
+    await capturing(s);
+    await sleep(100);
+    setMirroring(s, 'paused');
+    await waitFor(() => !s.live.stats().running, { message: 'a pause inside the window was not probed' });
+    expect(s.live.conflictLatched).toBe(false);
+  });
+
+  it('probes a pause right after iPhone Mirroring was resumed, however long capture ran while it was paused', async () => {
+    const s = setup({}, { timings: WINDOW });
+    setMirroring(s, 'paused');
+    await capturing(s);
+    // The whole window passes while paused, when no connected → paused change can happen.
+    await sleep(WINDOW_MS + 200);
+    setMirroring(s, 'connected');
+    await sleep(100);
+    setMirroring(s, 'paused');
+    await waitFor(() => !s.live.stats().running, { message: 'a pause right after the resume was not probed' });
+    // A toolbar pause right after the user clicked Resume ends the same way: only a first strike.
+    setMirroring(s, 'connected');
+    await waitFor(() => s.helper.starts().length === 2 && s.live.stats().phase === 'capturing', { message: 'helper not restarted to confirm the conflict' });
+    expect(s.live.conflictLatched).toBe(false);
+    expect(s.device.activity).toEqual([]);
+  });
+
+  it('measures the window up to the last reading that said connected, not to when a delayed status poll noticed the pause', async () => {
+    const s = setup({}, { timings: WINDOW });
+    await capturing(s);
+    // The next status poll waits behind a slow Mirroir action (a swipe takes 2–4 s);
+    // the pause began after this reading.
+    s.device.heldReadingAt = Date.now();
+    await sleep(WINDOW_MS + 200);
+    s.device.heldReadingAt = null;
+    setMirroring(s, 'paused');
+    await waitFor(() => !s.live.stats().running, { message: 'a pause that began inside the window was not probed' });
+  });
+
+  it('does not reopen the window on a resize ("window") later in the helper session', async () => {
+    const { log, lines } = recordingLogger();
+    const s = setup({}, { timings: WINDOW, log, script: [{ atMs: WINDOW_MS + 300, event: 'window', ptW: 410, ptH: 900, pxW: 730, pxH: 1604 }] });
+    await capturing(s);
+    await waitFor(() => lines.some((l) => l.msg === 'Live capture window is 410x900 pt'), { message: 'resize not reported' });
+    setMirroring(s, 'paused');
+    await sleep(300);
+    expect(s.live.stats()).toMatchObject({ running: true, phase: 'capturing' });
+    expect(s.helper.starts()).toHaveLength(1);
+  });
+
+  it('reopens the window when the helper restarts its capture (a new "started" without "waiting")', async () => {
+    const { log, lines } = recordingLogger();
+    const s = setup({}, { timings: WINDOW, log, script: [{ atMs: WINDOW_MS + 300, event: 'started', ptW: 410, ptH: 898, pxW: 730, pxH: 1600 }] });
+    await capturing(s);
+    await waitFor(() => lines.some((l) => l.msg === 'The live capture helper restarted its capture'), { message: 'capture restart not reported' });
+    setMirroring(s, 'paused');
+    await waitFor(() => !s.live.stats().running, { message: 'a pause right after the helper restarted its capture was not probed' });
+  });
+
+  it('opens a new window for a helper restarted after a stall', async () => {
+    const s = setup({ mode: 'silent' }, { timings: WINDOW });
+    show(s);
+    await waitFor(() => s.helper.starts().length === 1);
+    s.helper.setScenario({});
+    // The silent helper is restarted after stallMs, which is longer than the window.
+    await waitFor(() => s.helper.starts().length === 2 && s.live.stats().phase === 'capturing', { timeoutMs: 5000, message: 'stalled helper not restarted' });
+    setMirroring(s, 'paused');
+    await waitFor(() => !s.live.stats().running, { message: 'a pause right after the restart was not probed' });
+  });
+
+  it('treats a short pause right after a restart for a genuine pause as a first strike only (iPhone Mirroring toolbar)', async () => {
+    const s = setup({}, { timings: { conflictProbeMs: 400, conflictWindowMs: WINDOW_MS } });
+    await capturing(s);
+    // The pointer rests on iPhone Mirroring right after the viewer opened: paused for longer than the probe.
+    setMirroring(s, 'paused');
+    await waitFor(() => s.helper.starts().length === 2 && s.live.stats().phase === 'capturing', { timeoutMs: 5000, message: 'not restarted after a genuine pause' });
+    setMirroring(s, 'connected');
+    await sleep(100);
+    // Its toolbar again for a moment, inside the restarted helper's window.
+    setMirroring(s, 'paused');
+    await waitFor(() => !s.live.stats().running, { message: 'the pause after the restart was not probed' });
+    setMirroring(s, 'connected');
+    await waitFor(() => s.helper.starts().length === 3 && s.live.stats().phase === 'capturing', { message: 'helper not restarted to confirm the conflict' });
+    expect(s.live.conflictLatched).toBe(false);
+    expect(s.device.activity).toEqual([]);
+  });
+
+  it('forgets a first strike once a later helper session captured past its window with Mirroring connected', async () => {
+    const { log, lines } = recordingLogger();
+    // The restart must open its window within the window of the first strike: room for a slow process start.
+    const s = setup({}, { timings: { ...PROBE, conflictWindowMs: 1500 }, log });
+    await capturing(s);
+    await firstStrike(s);
+    await waitFor(() => lines.some((l) => l.msg.includes('the earlier pause was not caused by capture')), { message: 'first strike not forgotten' });
+
+    // A new helper session (the viewer closed and opened again): one short pause
+    // inside its window is a first strike again, not a latch.
+    show(s, 0);
+    await waitFor(() => !s.live.stats().running, { message: 'helper not stopped once nobody needed it' });
+    show(s);
+    await waitFor(() => s.helper.starts().length === 3 && s.live.stats().phase === 'capturing', { message: 'helper not started for the viewer' });
+    await firstStrike(s);
+    expect(s.helper.starts()).toHaveLength(4);
+    expect(s.device.activity).toEqual([]);
+  });
+
+  it('forgets a first strike that no restarted helper session confirmed in time (the viewer closed during the check)', async () => {
+    const { log, lines } = recordingLogger();
+    const s = setup({}, { timings: WINDOW, log });
+    await capturing(s);
+    setMirroring(s, 'paused');
+    await waitFor(() => !s.live.stats().running, { message: 'helper not stopped for the conflict probe' });
+    // Nobody needs capture any more when Mirroir reports connected again: a first strike, but no restart.
+    show(s, 0);
+    setMirroring(s, 'connected');
+    await waitFor(() => lines.some((l) => l.msg.includes('restarting live capture once to confirm')), { message: 'no first strike' });
+    await waitFor(() => lines.some((l) => l.msg.includes('capture is no longer a suspect')), { message: 'unconfirmable first strike kept' });
+    expect(s.helper.starts()).toHaveLength(1);
+
+    // The viewer opens again later: one short pause inside the new window is a first strike again, not a latch.
+    show(s);
+    await waitFor(() => s.helper.starts().length === 2 && s.live.stats().phase === 'capturing', { message: 'helper not started for the viewer' });
+    await firstStrike(s);
+    expect(s.helper.starts()).toHaveLength(3);
+    expect(s.device.activity).toEqual([]);
+  });
+
+  it('does not reopen the window when Mirroring connects again later in the capture run (repeated toolbar pauses, a Mirroir restart)', async () => {
+    const { log, lines } = recordingLogger();
+    const s = setup({}, { timings: WINDOW, log });
+    await capturing(s);
+    await sleep(WINDOW_MS + 200);
+    // Mirroir restarts (status unknown for a moment), then the pointer moves over iPhone
+    // Mirroring's toolbar: every pause begins right after Mirroring connected again.
+    setMirroring(s, 'unknown');
+    await sleep(100);
+    for (const pausedMs of [150, 300, 200]) {
+      setMirroring(s, 'connected');
+      await sleep(100);
+      setMirroring(s, 'paused');
+      await sleep(pausedMs);
+    }
+    setMirroring(s, 'connected');
+    await sleep(300);
+    expect(lines.filter((l) => l.msg.startsWith('Mirroir reported iPhone Mirroring as paused while live capture was running'))).toEqual([]);
+    expect(s.helper.starts()).toHaveLength(1);
+    expect(s.live.stats()).toMatchObject({ running: true, phase: 'capturing' });
+    expect(s.live.conflictLatched).toBe(false);
+  });
+
   it('does not probe on a pause while the helper is not capturing', async () => {
     const s = setup({ mode: 'waiting' }, { timings: PROBE });
     show(s);
@@ -644,25 +923,32 @@ describe('LiveCapture conflict safety latch (fake helper, fake Mirroir status)',
     expect(s.helper.starts()).toHaveLength(1);
   });
 
-  it('clears the latch when live capture is switched off and on, or its frame rate changes', async () => {
+  it('clears the latch, or a first strike, when live capture is switched off and on, or its frame rate changes', async () => {
     const s = setup({}, { timings: PROBE });
     await capturing(s);
     await latch(s);
+    const starts = s.helper.starts().length;
 
     const screenshot = s.c.settings.get().connection.screenshot;
     s.c.settings.update({ connection: { screenshot: { ...screenshot, liveCapture: false } } });
     expect(s.live.conflictLatched).toBe(false);
     expect(s.live.stats()).toMatchObject({ available: false, error: null });
     s.c.settings.update({ connection: { screenshot: { ...screenshot, liveCapture: true } } });
-    await waitFor(() => s.helper.starts().length === 2, { message: 'not restarted after switching live capture back on' });
+    await waitFor(() => s.helper.starts().length === starts + 1, { message: 'not restarted after switching live capture back on' });
     await waitFor(() => s.live.isDelivering());
     expect(s.live.stats()).toMatchObject({ available: true, error: null });
 
     await latch(s);
     s.c.settings.update({ connection: { screenshot: { ...s.c.settings.get().connection.screenshot, liveFps: 12 } } });
     expect(s.live.conflictLatched).toBe(false);
-    await waitFor(() => s.helper.starts().length === 3, { message: 'not restarted after a frame rate change' });
-    expect(s.helper.starts()[2]!.argv).toContain('12');
+    await waitFor(() => s.helper.starts().length === starts + 3, { message: 'not restarted after a frame rate change' });
+    expect(s.helper.starts()[starts + 2]!.argv).toContain('12');
+
+    // A first strike is forgotten too: after a frame rate change, the next one is a first strike again.
+    await firstStrike(s);
+    s.c.settings.update({ connection: { screenshot: { ...s.c.settings.get().connection.screenshot, liveFps: 8 } } });
+    await firstStrike(s);
+    expect(s.device.activity).toHaveLength(2);
   });
 
   it('latches from real DeviceController status polls, records a connection activity row and leaves input gates on Mirroir state', async () => {
@@ -677,11 +963,16 @@ describe('LiveCapture conflict safety latch (fake helper, fake Mirroir status)',
     capture.start();
     await waitFor(() => capture.isDelivering(), { message: 'no live frames' });
 
-    d.writeMockState({ mirroring: 'paused' });
-    await d.device.refreshStatus();
-    await waitFor(() => !capture.stats().running, { message: 'helper not stopped for the conflict probe' });
-    d.writeMockState({ mirroring: 'connected' });
-    await d.device.refreshStatus();
+    // A first strike restarts the helper; the same in the restarted session latches.
+    for (const helperStarts of [1, 2]) {
+      await waitFor(() => helper.starts().length === helperStarts && capture.stats().phase === 'capturing', { message: 'helper not capturing' });
+      expect(capture.conflictLatched).toBe(false);
+      d.writeMockState({ mirroring: 'paused' });
+      await d.device.refreshStatus();
+      await waitFor(() => !capture.stats().running, { message: 'helper not stopped for the conflict probe' });
+      d.writeMockState({ mirroring: 'connected' });
+      await d.device.refreshStatus();
+    }
     await waitFor(() => capture.conflictLatched, { message: 'conflict not latched' });
 
     const row = d.activity.query({ categories: ['connection'] }).find((e) => e.type === 'live.conflict');
@@ -692,7 +983,7 @@ describe('LiveCapture conflict safety latch (fake helper, fake Mirroir status)',
     d.writeMockState({ mirroring: 'paused' });
     const allow: PolicyDecision = { verdict: 'allow', risk: 'low', reasons: [], rules: [] };
     await expect(d.device.perform({ kind: 'press_home' }, { actor: 'user', decision: allow })).rejects.toMatchObject({ code: 'paused' });
-    expect(helper.starts()).toHaveLength(1);
+    expect(helper.starts()).toHaveLength(2);
   });
 
   it('does not latch when the user resumes through a capture with resume allowed (real DeviceController)', async () => {

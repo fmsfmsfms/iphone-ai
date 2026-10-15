@@ -183,12 +183,77 @@ export function parseDescribeScreen(text: string): ParsedDescription {
   return { elements, icons, hints, meta, ocrFailed, noText, scrolled };
 }
 
-/** Stable fingerprint of what is on screen, used for change and loop detection. */
-export function screenFingerprint(elements: readonly ScreenElement[]): string {
+/** The status-bar clock as OCR reads it on a real iPhone: "3:16 M", "10:171", "13.17.X", "3,18 x". */
+const STATUS_CLOCK = /^(\d{1,2})[:.,](\d{2})/;
+/** A price that starts like a time ("1,249.00", "12.50 SAR", "9.99 $"): never the clock. */
+const PRICE_LIKE = /^\d{1,2}[:.,]\d{2}\d?[.,]\d|\p{Sc}|#|\b(sar|sr|usd|aed|eur|gbp|kwd|qar|bhd|omr)\b|ر\s?\.\s?س|ريال|ریال/iu;
+/** The clock carries at most a few stray glyphs ("3:16 M", "10:14 t's not": a caption merged in). */
+const STATUS_CLOCK_MAX_LETTERS = 6;
+/** The status bar lies in the top 12% of the window (y≈63 of the 785 pt iPhone Mirroring window). */
+const STATUS_BAR_TOP_SHARE = 0.12;
+/** The clock sits at the left of the status bar (x≈64–93 of the 356 pt window). */
+const STATUS_CLOCK_LEFT_SHARE = 0.4;
+/** Window size assumed when the caller does not know it (portrait iPhone Mirroring is ~356×785 pt). */
+const STATUS_BAR_FALLBACK_HEIGHT_PT = 800;
+const STATUS_BAR_FALLBACK_WIDTH_PT = 360;
+/**
+ * Half the height of the status-bar row. On the recorded device the clock,
+ * signal and battery texts of one observation sit within 3 pt of each other.
+ */
+export const STATUS_BAR_HALF_ROW_PT = 6;
+
+/** The y below which the status area (status bar, Dynamic Island) ends: the top 12% of the window. */
+export function statusAreaBottom(heightPt?: number | null): number {
+  return (heightPt && heightPt > 0 ? heightPt : STATUS_BAR_FALLBACK_HEIGHT_PT) * STATUS_BAR_TOP_SHARE;
+}
+
+/** Whether a text reads as the status-bar clock: a valid time first, no price, few letters. */
+function isClockReading(label: string): boolean {
+  const text = label.normalize('NFKC').trim();
+  const time = STATUS_CLOCK.exec(text);
+  if (!time || Number(time[1]) > 23 || Number(time[2]) > 59) return false;
+  if (PRICE_LIKE.test(text)) return false;
+  return (text.match(/\p{L}/gu) ?? []).length <= STATUS_CLOCK_MAX_LETTERS;
+}
+
+/**
+ * The y of the status-bar row in one observation, anchored on the clock: the
+ * topmost clock reading in the top-left of the window (top 12%, left 40%).
+ * Null when no clock is visible (a banner covers it, a full-screen app hides
+ * it, OCR misread it): then nothing counts as status bar, which fails safe.
+ */
+export function statusBarRowY(
+  elements: readonly ScreenElement[],
+  heightPt?: number | null,
+  widthPt?: number | null,
+): number | null {
+  const bottom = statusAreaBottom(heightPt);
+  const right = (widthPt && widthPt > 0 ? widthPt : STATUS_BAR_FALLBACK_WIDTH_PT) * STATUS_CLOCK_LEFT_SHARE;
+  let row: number | null = null;
+  for (const e of elements) {
+    if (!e.label || e.y < 0 || e.y >= bottom || e.x < 0 || e.x > right) continue;
+    if (!isClockReading(e.label)) continue;
+    if (row === null || e.y < row) row = e.y;
+  }
+  return row;
+}
+
+/** Whether an element sits on the status-bar row found by statusBarRowY (never when there is none). */
+export function inStatusBarRow(element: ScreenElement, rowY: number | null): boolean {
+  return rowY !== null && Math.abs(element.y - rowY) <= STATUS_BAR_HALF_ROW_PT;
+}
+
+/**
+ * Stable fingerprint of what is on screen, used for change and loop detection.
+ * `heightPt` / `widthPt` are the window size (for finding the status bar);
+ * without them a portrait Mirroring window is assumed.
+ */
+export function screenFingerprint(elements: readonly ScreenElement[], heightPt?: number | null, widthPt?: number | null): string {
+  const statusRow = statusBarRowY(elements, heightPt, widthPt);
   const normalized = elements
     .filter((e) => e.label)
-    // Ignore the status-bar clock and battery so the fingerprint does not change every minute.
-    .filter((e) => !(e.y < 50 && /^(\d{1,2}:\d{2}|\d{1,3}%?)$/.test(e.label.trim())))
+    // Ignore the status bar (clock, signal, battery) so the fingerprint does not change every minute.
+    .filter((e) => !inStatusBarRow(e, statusRow))
     .map((e) => `${e.label.trim().toLowerCase()}@${Math.round(e.x / 20)},${Math.round(e.y / 20)}`)
     .sort()
     .join('|');

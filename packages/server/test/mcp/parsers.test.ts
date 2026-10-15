@@ -6,6 +6,7 @@ import { describe, expect, it } from 'vitest';
 import {
   classifyInputError,
   geometryId,
+  inStatusBarRow,
   isPermissionDenial,
   makeGeometry,
   parseDescribeScreen,
@@ -15,6 +16,7 @@ import {
   parseStatus,
   parseTargets,
   screenFingerprint,
+  statusBarRowY,
 } from '../../src/mcp/parsers.js';
 import type { ScreenElement } from '@iphone-ai/shared';
 
@@ -431,5 +433,63 @@ describe('screenFingerprint', () => {
     const withIcon = [...base, { id: 'e9', label: '', x: 372, y: 84, kind: 'icon ~28pt' }];
     expect(screenFingerprint(withIcon)).toBe(screenFingerprint(base));
     expect(screenFingerprint(base)).toMatch(/^[0-9a-f]{16}$/);
+  });
+
+  // Recorded on a real iPhone (356×785 pt Mirroring window): the status bar is at
+  // y≈63, below the old fixed y<50 band, and OCR reads it differently every time.
+  const page = [el('Search the menu', 178, 160), el('Big Mac', 120, 300)];
+  const bar = (...labels: [string, number, number][]) => labels.map(([label, x, y]) => el(label, x, y));
+
+  it('stays the same across clock minutes and signal/battery OCR flicker on the real status row', () => {
+    const first = screenFingerprint([...bar(['3:16 M', 72, 63], ['•ll 4G 60', 278, 63], ['67', 299, 63]), ...page], 785);
+    for (const row of [
+      bar(['3:17 A', 72, 63], ['•Ill 4G 60', 278, 63], ['67', 299, 63]),
+      bar(['3:171', 73, 63], ['29 ÷ ||', 280, 62]),
+      bar(['10:15 20 234', 90, 60], ['baơl i/t 4G 159', 268, 60]),
+      bar(['13.17.X', 70, 60]),
+      bar(['3,18 x', 70, 60]),
+    ]) {
+      expect(screenFingerprint([...row, ...page], 785)).toBe(first);
+      // Without the window height a portrait Mirroring window is assumed.
+      expect(screenFingerprint([...row, ...page])).toBe(first);
+    }
+  });
+
+  it('counts the top row when no clock anchors it (a banner covering the status bar)', () => {
+    const plain = screenFingerprint([...bar(['3:16 M', 72, 63]), ...page], 785);
+    expect(screenFingerprint([...bar(['•ll 4G 60', 278, 63]), ...page], 785)).not.toBe(plain);
+    expect(screenFingerprint([...bar(['Messages', 90, 63]), ...page], 785)).not.toBe(plain);
+    // Content 9 pt below the clock is not the status row.
+    expect(screenFingerprint([...bar(['3:16 M', 72, 63], ['Al Rajhi', 150, 72]), ...page], 785)).not.toBe(plain);
+  });
+
+  it('finds the status-bar row by its clock in the top 12% of the window only', () => {
+    expect(statusBarRowY(bar(['•ll 4G 60', 278, 63], ['3:16 M', 72, 63]), 785)).toBe(63);
+    expect(statusBarRowY(bar(['3:16 M', 72, 63]), 400)).toBe(null);
+    expect(statusBarRowY(bar(['9:41', 64, 27], ['10:30 Meeting', 120, 80]), 898)).toBe(27);
+    expect(statusBarRowY(bar(['Alarm', 60, 40], ['7:30', 60, 300]), 785)).toBe(null);
+    expect(statusBarRowY([], 785)).toBe(null);
+    expect(inStatusBarRow(el('67', 299, 66), 63)).toBe(true);
+    expect(inStatusBarRow(el('Al Rajhi', 150, 72), 63)).toBe(false);
+    expect(inStatusBarRow(el('67', 299, 63), null)).toBe(false);
+  });
+
+  it('anchors only on a clock reading at the left: never a price, an invalid time or a line of content', () => {
+    // Real readings, including a caption merged into the clock.
+    for (const clock of ['3:16 M', '10:171', '13.17.X', '3,18 x', "10:14 t's not", '10:151 ~ C4']) {
+      expect(statusBarRowY(bar([clock, 80, 61]), 785, 356), clock).toBe(61);
+    }
+    // A price that starts like a time, an hour or minute out of range, a centred or right-hand text.
+    for (const text of ['49.00 SAR', '12.50 SAR', '1,249.00', '9.99 $', '# 12.50', '25:10', '12:75']) {
+      expect(statusBarRowY(bar([text, 80, 61]), 785, 356), text).toBe(null);
+    }
+    expect(statusBarRowY(bar(['12:30 Confirm payment', 80, 61]), 785, 356)).toBe(null);
+    expect(statusBarRowY(bar(['12:30', 178, 80]), 785, 356)).toBe(null);
+    expect(statusBarRowY(bar(['49.00', 300, 88], ['3:16 M', 72, 63]), 785, 356)).toBe(63);
+    // Without the window width a 360 pt portrait window is assumed (left 144 pt).
+    expect(statusBarRowY(bar(['10:14', 140, 64]))).toBe(64);
+    expect(statusBarRowY(bar(['10:14', 150, 64]))).toBe(null);
+    // Landscape: the left 40% of the wider window.
+    expect(statusBarRowY(bar(['9:41', 200, 20]), 356, 785)).toBe(20);
   });
 });

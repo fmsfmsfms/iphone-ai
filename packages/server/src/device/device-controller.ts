@@ -884,7 +884,7 @@ export class DeviceController extends EventEmitter {
         imageBase64: image?.data ?? null,
         imageMimeType: image?.mimeType ?? null,
         geometry: this.mirroring.geometry,
-        fingerprint: screenFingerprint(parsed.elements),
+        fingerprint: screenFingerprint(parsed.elements, this.mirroring.geometry?.heightPt, this.mirroring.geometry?.widthPt),
       };
     });
   }

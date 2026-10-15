@@ -24,15 +24,31 @@
 // with backoff; meanwhile ScreenStream polling (which pauses only while live
 // frames are actually arriving) keeps the viewer updated.
 //
-// Conflict safety latch: when Mirroir's state goes from connected to paused
-// while the helper is capturing, the helper is stopped and kept stopped for a
-// short probe. If Mirroir reports connected again within conflictProbeMs of
-// the helper exiting, capture itself caused the "pause": live capture stays
-// off for this backend session (ScreenStream polls Mirroir screenshots
-// instead) until the live capture switch or frame rate is changed. If the
-// pause persists, or the user's Resume (a capture with resume allowed) ended
-// it, it was genuine and the normal rules apply again. The latch
-// only ever stops capture; every input gate keeps using Mirroir's state.
+// Conflict safety latch: a capture-induced overlay (the old stream design)
+// appeared 0.6–2 s after capture started. Mirroir also reports "paused" for
+// 0.25–6 s whenever the iPhone Mirroring window is active under the pointer
+// (its own toolbar buttons), often several times in a row, which has nothing
+// to do with capture. So only a connected → paused change that began within
+// conflictWindowMs of a capture run starting with Mirroring connected starts
+// a probe. A run starts at the helper's "started" (it re-sends one when it
+// restarts its capture; a resize does not count); if Mirroring was not
+// connected then, the run's window opens at the first connected reading after
+// it. The end of a pause (or any other reconnect) later in the run does not
+// reopen it. The window is measured to the last status reading that still
+// said connected, so a status poll waiting behind a slow Mirroir action does
+// not hide a conflict. The probe stops the helper and keeps it stopped. If the
+// pause persists for conflictProbeMs after the helper exited, or the user's
+// Resume (a capture with resume allowed) ended it, it was genuine and the
+// normal rules apply again. If Mirroir reports connected again, capture is
+// only a suspect (a toolbar pause can end the same way): the helper is
+// restarted at once, and only a repeat in a later helper session whose window
+// opened within conflictWindowMs of that first strike (a capture-induced
+// overlay comes back on every start) latches live capture off for this
+// backend session (ScreenStream polls Mirroir screenshots instead) until the
+// live capture switch or frame rate is changed, which also clears a suspect.
+// The suspect is forgotten once that restart captured while connected past
+// its window, or when no restart opened a window in time. The latch only ever
+// stops capture; every input gate keeps using Mirroir's state.
 
 import { spawn, type ChildProcess } from 'node:child_process';
 import { EventEmitter } from 'node:events';
@@ -342,9 +358,16 @@ export interface LiveCaptureTimings {
   killGraceMs: number;
   /**
    * Conflict probe: after the helper exited, Mirroir reporting "connected"
-   * again within this window latches live capture off for the session.
+   * again within this window makes capture a suspect; the same in the helper
+   * session restarted right after it latches live capture off for the session.
    */
   conflictProbeMs: number;
+  /**
+   * Only a connected → paused change that began this soon after a capture run
+   * started with Mirroring connected starts a probe. A suspect is confirmed
+   * only in a helper session whose window opened this soon after it.
+   */
+  conflictWindowMs: number;
 }
 
 export const DEFAULT_LIVE_TIMINGS: LiveCaptureTimings = {
@@ -359,6 +382,7 @@ export const DEFAULT_LIVE_TIMINGS: LiveCaptureTimings = {
   tickMs: 500,
   killGraceMs: 2000,
   conflictProbeMs: 5000,
+  conflictWindowMs: 8000,
 };
 
 export interface LiveCaptureOptions {
@@ -418,8 +442,18 @@ interface HelperSession {
   parser: HelperStreamParser;
   startedAt: number;
   phase: 'starting' | 'waiting' | 'capturing';
-  /** When the helper last reported "started"/"window" (capture running). */
+  /**
+   * When capture last (re)started: the helper's last "started" (it re-sends
+   * one when it restarts its capture), else the first "window" or frame after
+   * "waiting". A resize does not move it.
+   */
   capturingSince: number | null;
+  /**
+   * When this capture run first ran with Mirroring connected (its conflict
+   * window opens then): capturingSince, else the first connected reading
+   * after it. Later reconnects (the end of any pause) do not move it.
+   */
+  connectedAt: number | null;
   firstFrameAt: number | null;
   lastFrameAt: number | null;
   frames: number;
@@ -432,6 +466,17 @@ interface HelperSession {
   stderrRest: string;
   timers: NodeJS.Timeout[];
   ended: boolean;
+}
+
+/**
+ * A conflict probe: the helper session `sessionId`, whose conflict window
+ * opened at `windowStart`, was stopped after Mirroir reported a pause while it captured.
+ */
+interface ConflictProbe {
+  startedAt: number;
+  helperExitedAt: number | null;
+  sessionId: number;
+  windowStart: number;
 }
 
 export class LiveCapture extends EventEmitter {
@@ -470,8 +515,16 @@ export class LiveCapture extends EventEmitter {
   private announce = true;
   /** Mirroring state seen at the previous evaluation (connected → paused detection). */
   private lastMirroringState: MirroringState | null = null;
-  /** Conflict probe in progress: the helper was stopped after Mirroir reported a pause while it captured. */
-  private probe: { startedAt: number; helperExitedAt: number | null } | null = null;
+  /** `checkedAt` of the last status reading that said connected (a pause began after it). */
+  private lastConnectedReadAt: number | null = null;
+  /** Conflict probe in progress. */
+  private probe: ConflictProbe | null = null;
+  /**
+   * First probe that ended with Mirroir connected again (at `at`): a later
+   * helper session whose window opened within conflictWindowMs of it must
+   * repeat it to latch.
+   */
+  private suspect: { sessionId: number; at: number } | null = null;
   /** Capture made Mirroir report "paused": live capture stays off until its settings change. */
   private conflict = false;
 
@@ -495,7 +548,9 @@ export class LiveCapture extends EventEmitter {
     if (!this.helper) {
       this.log.info(`Live capture unavailable: ${this.unavailableReason}`);
     }
-    this.lastMirroringState = this.device.getStatus().mirroring.state;
+    const status = this.device.getStatus();
+    this.lastMirroringState = status.mirroring.state;
+    this.noteReading(status);
     // Device status covers lease, permission and Mirroring changes; settings cover the switch and fps.
     this.unsubscribers.push(
       this.hub.subscribe((event) => {
@@ -688,13 +743,21 @@ export class LiveCapture extends EventEmitter {
   // ───────────────────────────── capture conflict ─────────────────────────────
 
   /**
-   * Starts a conflict probe on a connected → paused transition while the
-   * helper captures, and settles a running probe from the next status polls.
+   * Starts a conflict probe on a connected → paused transition early in a
+   * capture run (see the header), and settles a running probe from the next
+   * status polls.
    */
   private observeMirroring(): void {
-    const state = this.device.getStatus().mirroring.state;
+    const status = this.device.getStatus();
+    const state = status.mirroring.state;
     const previous = this.lastMirroringState;
     this.lastMirroringState = state;
+    this.noteReading(status);
+    const session = this.session;
+    if (state === 'connected' && session && !session.stopping && session.phase === 'capturing' && session.connectedAt === null) {
+      // This capture run began while Mirroring was not connected: its window opens now.
+      session.connectedAt = Date.now();
+    }
     const probe = this.probe;
     if (probe) {
       const resumedAt = this.device.lastUserResumeAt ?? null;
@@ -711,23 +774,65 @@ export class LiveCapture extends EventEmitter {
       return;
     }
     if (previous !== 'connected' || state !== 'paused' || this.conflict) return;
-    const session = this.session;
     if (!session || session.stopping || session.ended || session.phase !== 'capturing') return;
-    this.probe = { startedAt: Date.now(), helperExitedAt: null };
+    // Only a pause that began right after capture started while connected can be capture's doing.
+    // It began after the last reading that still said connected, however late the poll noticed it.
+    const since = this.windowStart(session);
+    if (since === null || (this.lastConnectedReadAt ?? Date.now()) - since > this.t.conflictWindowMs) return;
+    this.probe = { startedAt: Date.now(), helperExitedAt: null, sessionId: session.id, windowStart: since };
     this.log.info('Mirroir reported iPhone Mirroring as paused while live capture was running; stopping the helper to check whether capture caused it', {
       frames: session.frames,
+      session: session.id,
     });
     this.stopHelper(session, 'conflict-probe');
   }
 
-  /** Mirroir reported connected again right after the helper stopped: capture caused the "pause". */
-  private latchConflict(probe: { startedAt: number; helperExitedAt: number | null }): void {
+  /**
+   * Remembers the last status reading that said connected. Status events are
+   * published only on changes, so the watchdog tick samples it too.
+   */
+  private noteReading(status: DeviceStatus): void {
+    if (status.mirroring.state === 'connected' && status.mirroring.checkedAt !== null) {
+      this.lastConnectedReadAt = status.mirroring.checkedAt;
+    }
+  }
+
+  /** Start of a session's conflict window: its capture run first ran with Mirroring connected. */
+  private windowStart(session: HelperSession): number | null {
+    return session.connectedAt;
+  }
+
+  /** Capture (re)started: a new conflict window, open now if Mirroring is connected. */
+  private markCaptureStart(session: HelperSession, now: number): void {
+    session.capturingSince = now;
+    session.connectedAt = this.device.getStatus().mirroring.state === 'connected' ? now : null;
+  }
+
+  /**
+   * Mirroir reported connected again right after the helper stopped. The
+   * first time capture is only a suspect and the helper is restarted (the
+   * caller's evaluation does that); a repeat in that restarted helper session
+   * (or a later one whose window opened within conflictWindowMs of the first
+   * strike) means capture caused the "pause".
+   */
+  private latchConflict(probe: ConflictProbe): void {
     this.probe = null;
-    this.conflict = true;
     const sinceStopMs = probe.helperExitedAt === null ? null : Date.now() - probe.helperExitedAt;
+    const suspect = this.suspect;
+    if (!suspect || probe.sessionId <= suspect.sessionId || probe.windowStart - suspect.at > this.t.conflictWindowMs) {
+      this.suspect = { sessionId: probe.sessionId, at: Date.now() };
+      this.log.info(
+        'Mirroir reported iPhone Mirroring as connected again right after live capture stopped; restarting live capture once to confirm that capture caused the pause',
+        { probeMs: Date.now() - probe.startedAt, sinceHelperExitMs: sinceStopMs, session: probe.sessionId },
+      );
+      return;
+    }
+    this.suspect = null;
+    this.conflict = true;
     this.log.warn(`Live capture turned off for this session: ${LIVE_CONFLICT_REASON} (polling screenshots instead)`, {
       probeMs: Date.now() - probe.startedAt,
       sinceHelperExitMs: sinceStopMs,
+      sessions: [suspect.sessionId, probe.sessionId],
     });
     this.device.recordConnectionActivity?.({
       type: 'live.conflict',
@@ -739,9 +844,10 @@ export class LiveCapture extends EventEmitter {
     this.emitState();
   }
 
-  /** Clears the latch (and a running probe). Returns true when the latch was set. */
+  /** Clears the latch (and a suspect and a running probe). Returns true when the latch was set. */
   private clearConflict(): boolean {
     this.probe = null;
+    this.suspect = null;
     if (!this.conflict) return false;
     this.conflict = false;
     this.log.info('Live capture conflict latch cleared by a settings change; live capture may run again');
@@ -757,6 +863,35 @@ export class LiveCapture extends EventEmitter {
       probeMs: now - probe.startedAt,
     });
     this.evaluate();
+  }
+
+  /**
+   * Clears the suspect once a later helper session captured while connected
+   * past its conflict window, or once no helper session can confirm it any
+   * more (none opened a window within conflictWindowMs of the first strike,
+   * for example because nobody needed capture then).
+   */
+  private checkSuspect(now: number): void {
+    const suspect = this.suspect;
+    if (!suspect || this.probe) return;
+    const session = this.session;
+    const later = session && session.id > suspect.sessionId && !session.stopping && !session.ended && session.phase === 'capturing' ? session : null;
+    const since = later ? this.windowStart(later) : null;
+    if ((since ?? now) - suspect.at > this.t.conflictWindowMs) {
+      this.suspect = null;
+      this.log.info('Live capture was not restarted right after the earlier pause; capture is no longer a suspect', {
+        suspectSession: suspect.sessionId,
+      });
+      return;
+    }
+    if (!later || since === null || this.lastMirroringState !== 'connected') return;
+    const readAt = this.lastConnectedReadAt;
+    if (readAt === null || readAt - since <= this.t.conflictWindowMs) return;
+    this.suspect = null;
+    this.log.info('Live capture kept running with iPhone Mirroring connected; the earlier pause was not caused by capture', {
+      session: later.id,
+      suspectSession: suspect.sessionId,
+    });
   }
 
   private ensureRunning(): void {
@@ -806,6 +941,7 @@ export class LiveCapture extends EventEmitter {
       startedAt: Date.now(),
       phase: 'starting',
       capturingSince: null,
+      connectedAt: null,
       firstFrameAt: null,
       lastFrameAt: null,
       frames: 0,
@@ -963,6 +1099,7 @@ export class LiveCapture extends EventEmitter {
         }
         session.phase = 'waiting';
         session.capturingSince = null;
+        session.connectedAt = null;
         this.waitingReason = status.message ? `Waiting for the iPhone Mirroring window: ${status.message}` : 'Waiting for the iPhone Mirroring window.';
         break;
       }
@@ -971,7 +1108,11 @@ export class LiveCapture extends EventEmitter {
         if (status.event === 'window' && status.ptW && status.ptH) {
           this.log.info(`Live capture window is ${status.ptW}x${status.ptH} pt`, { pxW: status.pxW ?? null, pxH: status.pxH ?? null });
         }
-        if (session.phase !== 'capturing') session.capturingSince = Date.now();
+        if (status.event === 'started' && session.phase === 'capturing') {
+          this.log.debug('The live capture helper restarted its capture', { session: session.id });
+        }
+        // Every "started" opens a new conflict window; a "window" (a resize) only when capture was not running.
+        if (status.event === 'started' || session.phase !== 'capturing') this.markCaptureStart(session, Date.now());
         session.phase = 'capturing';
         this.waitingReason = null;
         break;
@@ -1020,7 +1161,7 @@ export class LiveCapture extends EventEmitter {
     session.firstFrameAt ??= receivedAt;
     if (session.phase !== 'capturing') {
       session.phase = 'capturing';
-      session.capturingSince ??= receivedAt;
+      if (session.capturingSince === null) this.markCaptureStart(session, receivedAt);
     }
     this.latestFrame = frame;
     this.lastFrameAt = receivedAt;
@@ -1094,6 +1235,7 @@ export class LiveCapture extends EventEmitter {
 
   private tick(): void {
     const now = Date.now();
+    this.noteReading(this.device.getStatus());
     const session = this.session;
     if (session && !session.stopping && !session.ended) {
       if (session.errorAt !== null && (session.lastFrameAt ?? 0) < session.errorAt && now - session.errorAt >= this.t.stallMs) {
@@ -1107,6 +1249,7 @@ export class LiveCapture extends EventEmitter {
       }
     }
     this.checkProbeDeadline(now);
+    this.checkSuspect(now);
     this.updateDelivering(now);
   }
 

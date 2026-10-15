@@ -191,6 +191,19 @@ describe('sensitive rules', () => {
     expect(typed).toMatchObject({ verdict: 'require_approval', rules: ['sensitive.messaging.text'] });
   });
 
+  it('asks before plain "Pay" / "Order now" buttons and the Arabic order and pay words', () => {
+    for (const label of ['Pay', 'Pay SAR 49.00', 'Apple Pay', 'Payment', 'Order now', 'Checkout', 'اطلب الآن', 'أطلب', 'ادفع الآن', 'الدفع']) {
+      expect(evaluate({ label }), label).toMatchObject({ verdict: 'require_approval', rules: ['sensitive.payment'] });
+    }
+    // Whole words only for Latin keywords: none of these is a payment.
+    const rules = permissions().sensitiveRules;
+    for (const text of ['PayPal', 'Payload', 'Repay', 'Payday', 'Paying guests', 'Payments history']) {
+      expect(matchSensitiveRules(text, rules).map((h) => h.rule.id), text).not.toContain('payment');
+    }
+    // Arabic keywords match as substrings: "اطلب" is not inside "الطلبات" (the orders tab).
+    expect(matchSensitiveRules('الطلبات', rules)).toEqual([]);
+  });
+
   it('applies rules to typed text', () => {
     expect(evaluate({ action: { kind: 'type_text', text: 'please transfer 100' }, target: null }).rules).toEqual([
       'sensitive.payment.text',

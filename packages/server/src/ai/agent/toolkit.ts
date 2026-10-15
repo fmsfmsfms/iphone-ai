@@ -13,6 +13,8 @@
 import { z } from 'zod';
 
 import {
+  DEFAULT_BLOCKED_APPS,
+  DEFAULT_SENSITIVE_RULES,
   type ActionResult,
   type AgentStep,
   type ControlMode,
@@ -20,6 +22,7 @@ import {
   type PolicyDecision,
   type ScreenDescription,
   type ScreenElement,
+  type SensitiveRule,
   type SwipeDirection,
 } from '@iphone-ai/shared';
 
@@ -28,7 +31,16 @@ import type { SettingsStore } from '../../core/settings-store.js';
 import { describeTypedText, redactSecrets, redactToolArgs } from '../../core/redact.js';
 import { DeviceError, describeAction, type DeviceController } from '../../device/device-controller.js';
 import { matchElement } from '../../device/element-matcher.js';
-import { evaluatePolicy, normalizeText, screenHasAuthPrompt, type BlockedForeground, type PolicyTarget } from '../../policy/engine.js';
+import { inStatusBarRow, statusAreaBottom, statusBarRowY } from '../../mcp/parsers.js';
+import {
+  containsKeyword,
+  evaluatePolicy,
+  matchesBlockedApp,
+  normalizeText,
+  screenHasAuthPrompt,
+  type BlockedForeground,
+  type PolicyTarget,
+} from '../../policy/engine.js';
 import { detectBlockedForeground } from '../../policy/foreground.js';
 import { labelsAtPoint } from '../../policy/target.js';
 import type { ApprovalBroker } from '../../policy/approvals.js';
@@ -799,11 +811,18 @@ export class AgentToolkit {
 
   /** What the policy is told the action touches, derived from an observation. */
   private policyTarget(action: DeviceAction, ref: TargetRef, observation: Observation): PolicyTarget {
-    if (ref.kind === 'element') return { label: ref.label };
+    if (ref.kind === 'element' && ref.label) return { label: ref.label };
+    if (ref.kind === 'element' && 'x' in action) {
+      // An unlabeled icon (a chevron, an arrow button): the labels around it say
+      // what it does, checked like those of a coordinate tap at the same point.
+      const hit = labelsAtPoint(observation.description.elements, action.x, action.y);
+      return { label: null, candidates: hit.candidates, nearby: hit.nearby };
+    }
     if (ref.kind === 'point' && 'x' in action) {
       const hit = labelsAtPoint(observation.description.elements, action.x, action.y);
       return { label: hit.primary, candidates: hit.candidates, nearby: hit.nearby };
     }
+    if (ref.kind === 'element') return { label: null };
     if (action.kind === 'type_text') return { label: focusedFieldGuess(observation.description.elements) };
     if (action.kind === 'launch_app') return { label: action.name };
     return { label: null };
@@ -856,7 +875,8 @@ export class AgentToolkit {
       const message = err instanceof Error ? err.message : String(err);
       return { refused: errorResult(`Could not re-check the screen after your approval, so the action was NOT performed (${message}). Call observe_screen and try again.`) };
     }
-    const changed = screenChange(action, ref, before, fresh.observation);
+    const { sensitiveRules, blockedApps } = this.deps.settings.get().permissions;
+    const changed = screenChange(action, ref, before, fresh.observation, { sensitiveRules, blockedApps });
     if (changed) {
       this.task.addStep({
         type: 'policy',
@@ -976,19 +996,21 @@ export function formatObservation(description: ScreenDescription): string {
 }
 
 /** Why the screen no longer matches what was approved (null: it still matches). */
-function screenChange(action: DeviceAction, ref: TargetRef, before: Observation, fresh: Observation): string | null {
-  const contentChange = screenDiff(before.description, fresh.description);
+function screenChange(action: DeviceAction, ref: TargetRef, before: Observation, fresh: Observation, guard: DiffGuard): string | null {
+  const contentChange = screenDiff(before.description, fresh.description, guard);
   if ('x' in action) {
     const g0 = before.description.geometry?.geometryId ?? null;
     const g1 = fresh.description.geometry?.geometryId ?? null;
     if (g0 && g1 && g0 !== g1) return 'the iPhone window changed size';
     const at = `(${Math.round(action.x)}, ${Math.round(action.y)})`;
+    // The target must still be there AND the rest of the screen must match: the
+    // next checkout step can have "Continue" at the very same spot.
     if (ref.kind === 'element' && ref.label) {
       const label = ref.label;
       const still = fresh.description.elements.some(
         (e) => e.label && sameLabel(e.label, label) && Math.hypot(e.x - action.x, e.y - action.y) <= 20,
       );
-      return still ? null : `“${label}” is no longer at ${at}`;
+      return still ? contentChange : `“${label}” is no longer at ${at}`;
     }
     if (ref.kind === 'element') {
       // An unlabeled icon: it must still be there, on the same screen.
@@ -1001,7 +1023,7 @@ function screenChange(action: DeviceAction, ref: TargetRef, before: Observation,
       if ((was ?? '') !== (now ?? '') && !(was && now && sameLabel(was, now))) {
         return now ? `the label at ${at} is now “${now}”` : `“${was}” is no longer at ${at}`;
       }
-      return was ? null : contentChange;
+      return contentChange;
     }
     return contentChange;
   }
@@ -1010,29 +1032,180 @@ function screenChange(action: DeviceAction, ref: TargetRef, before: Observation,
   return contentChange;
 }
 
+/** Live permissions consulted by the screen comparison (the defaults are always consulted too). */
+export interface DiffGuard {
+  sensitiveRules?: readonly SensitiveRule[];
+  blockedApps?: readonly string[];
+}
+
 /** Text that changes on its own (clocks, timers, counters, percentages) — ignored when comparing screens. */
 const VOLATILE_TEXT = /^[\d\s:.,%+\-–—()/]*(am|pm)?$/i;
+/** A blinking text cursor that OCR reads as part of a word ("cheese|"). */
+const CARET = /[|¦│]/g;
+/**
+ * A currency next to digits makes the text an amount ("SAR 49.00", "49 SR",
+ * "$4.99"): it never counts as noise when its digits change. OCR reads the
+ * Saudi riyal sign (U+20C1) as "#" ("# 19.00"), and NFKC turns "﷼" into "ریال".
+ */
+const CURRENCY = /\b(sar|sr|usd|aed|eur|gbp|kwd|qar|bhd|omr)\b|ر\s?\.\s?س|ريال|ریال|[$€£¥#\u20c1]/u;
+/** A text that is only a currency ("SAR" read apart from "49.00" on the same line). */
+const CURRENCY_ONLY = /^(sar|sr|usd|aed|eur|gbp|kwd|qar|bhd|omr|ر\s?\.\s?س|ريال|ریال|[$€£¥#\u20c1])\.?$/u;
+/**
+ * Below the status area, any currency sign ("฿ 49", "₹ 49"), a masked number
+ * ("•••• 4321") or a quantity ("×2") makes an amount too. Not in the status
+ * area, where OCR reads the clock and signal glyphs as such ("฿112", "••").
+ */
+const AMOUNT_MARK = /\p{Sc}|×\s*\p{N}|\p{N}\s*×|[•*●·∙]{2,}\s*\p{N}/u;
+const CURRENCY_SIGN_ONLY = /^\p{Sc}\.?$/u;
+/** A count or relative time that ticks on its own: "5m", "2h", "3d", "• 9.5K", "1.2M". */
+const TICKER = /^([^\p{L}\p{N}]*)\d{1,3}(?:[.,]\d)?\s?([smhdwykb])$/u;
+/** Words that answer or act: never OCR noise, whatever their length. */
+const DECISIVE_WORDS: ReadonlySet<string> = new Set([
+  'ok', 'okay', 'yes', 'no', 'pay', 'buy', 'get', 'add', 'done', 'allow', 'accept', 'agree', 'confirm', 'send', 'delete',
+  'نعم', 'لا', 'تم', 'موافق', 'دفع', 'ادفع', 'حذف', 'مسح', 'نشر', 'شراء', 'إرسال', 'ارسال', 'تأكيد', 'تاكيد', 'اطلب',
+]);
+/** "The same spot" for an OCR re-read: text centres move a little when a reading gains or loses characters. */
+const SAME_SPOT_X = 15;
+const SAME_SPOT_Y = 8;
+/** A currency text this close on the same line turns a bare number into an amount. */
+const AMOUNT_NEIGHBOUR_X = 80;
+
+const lettersOf = (text: string) => (text.match(/\p{L}/gu) ?? []).join('');
+
+/** Text as compared across observations: no caret, normalized. */
+function stableText(label: string): string {
+  return normalizeText(label.replace(CARET, ''));
+}
+
+interface DiffItem {
+  element: ScreenElement;
+  text: string;
+  amount: boolean;
+  /** In the top 12% of the window (status bar, Dynamic Island), where OCR misreads glyphs. */
+  statusArea: boolean;
+}
+
+/** The texts of one observation that take part in the comparison. */
+function diffItems(d: ScreenDescription, guard: DiffGuard): DiffItem[] {
+  // The status bar (clock, signal, battery) changes on its own and OCR reads it
+  // differently every time ("3:17 a", "•Ill 4G 60"); it is found by its clock.
+  const statusRow = statusBarRowY(d.elements, d.geometry?.heightPt, d.geometry?.widthPt);
+  const statusBottom = statusAreaBottom(d.geometry?.heightPt);
+  const currencies = d.elements.filter((e) => {
+    const text = e.label ? stableText(e.label) : '';
+    return CURRENCY_ONLY.test(text) || (e.y >= statusBottom && CURRENCY_SIGN_ONLY.test(text));
+  });
+  const items: DiffItem[] = [];
+  for (const element of d.elements) {
+    if (!element.label) continue;
+    const text = stableText(element.label);
+    if (!text) continue;
+    const statusArea = element.y < statusBottom;
+    const amount =
+      /\p{N}/u.test(text) &&
+      (CURRENCY.test(text) ||
+        (!statusArea && AMOUNT_MARK.test(text)) ||
+        currencies.some((c) => c !== element && Math.abs(c.y - element.y) <= SAME_SPOT_Y && Math.abs(c.x - element.x) <= AMOUNT_NEIGHBOUR_X));
+    // An amount, a decision word or a keyword counts even on the status row
+    // (a "Pay" pill beside the clock, a price read as the anchor).
+    if (inStatusBarRow(element, statusRow) && !amount && !alwaysCounts(text, guard)) continue;
+    if (VOLATILE_TEXT.test(text) && !amount) continue;
+    items.push({ element, text, amount, statusArea });
+  }
+  return items;
+}
+
+/** New text that counts however it came about: decision words, sensitive keywords, blocked apps. */
+function alwaysCounts(text: string, guard: DiffGuard): boolean {
+  if (DECISIVE_WORDS.has(lettersOf(text))) return true;
+  // Every keyword, enabled or not, live or default: here a match only means "not noise".
+  for (const rules of [DEFAULT_SENSITIVE_RULES, guard.sensitiveRules ?? []]) {
+    if (rules.some((rule) => rule.keywords.some((keyword) => containsKeyword(text, keyword)))) return true;
+  }
+  return matchesBlockedApp(text, [...DEFAULT_BLOCKED_APPS, ...(guard.blockedApps ?? [])]) !== null;
+}
+
+/** A letter OCR garbles when it reads Arabic in Latin mode ("jai" → "jaû"): non-ASCII Latin, Cyrillic or Greek. */
+function isGarbleLetter(c: string): boolean {
+  return /[\p{Script=Latin}\p{Script=Cyrillic}\p{Script=Greek}]/u.test(c) && /\p{L}/u.test(c) && !/[a-z]/.test(c);
+}
+
+/**
+ * Whether `now` is OCR re-reading `was`: the same text but for spaces and one
+ * letter edit OCR makes (a garbled letter, or i/l mixed up). Digits, signs and
+ * symbols must match exactly, so an amount, a recipient ("Ahmed" → "Ahmad")
+ * or a check mark moving to another row is never a re-read.
+ */
+function isReread(was: string, now: string): boolean {
+  const a = [...was.replace(/\s+/g, '')];
+  const b = [...now.replace(/\s+/g, '')];
+  if (Math.abs(a.length - b.length) > 1) return false;
+  let head = 0;
+  while (head < a.length && head < b.length && a[head] === b[head]) head += 1;
+  let tail = 0;
+  while (tail < a.length - head && tail < b.length - head && a[a.length - 1 - tail] === b[b.length - 1 - tail]) tail += 1;
+  const lost = a.slice(head, a.length - tail);
+  const gained = b.slice(head, b.length - tail);
+  if (lost.length > 1 || gained.length > 1) return false;
+  const changed = [...lost, ...gained];
+  if (changed.length === 0) return true;
+  if (lost.length === 1 && gained.length === 1 && /^[il]$/.test(lost[0]!) && /^[il]$/.test(gained[0]!)) return true;
+  return changed.every((c) => /\p{L}/u.test(c)) && changed.some(isGarbleLetter);
+}
+
+/** The same counter or relative time at the same spot, ticked: "5m" → "6m", "• 9.5k" → "• 9.6k". */
+function isTick(was: string, now: string): boolean {
+  const a = TICKER.exec(was);
+  const b = TICKER.exec(now);
+  return !!a && !!b && a[1]!.replace(/\s+/g, '') === b[1]!.replace(/\s+/g, '') && a[2] === b[2];
+}
+
+/**
+ * Whether a text that was not on the earlier observation is OCR noise: a
+ * re-read of the text already at that spot (see isReread), a counter that
+ * ticked there, or — only in the status area, where OCR misreads the clock and
+ * signal glyphs — digits and symbols, or a lone letter where there was no text.
+ * Anything else is new: a dialog, a banner, a short answer ("OK", "No", "نعم")
+ * at a spot that was empty, a changed amount, a masked card number.
+ */
+function isOcrNoise(item: DiffItem, before: readonly ScreenElement[], guard: DiffGuard): boolean {
+  const { element, text, amount, statusArea } = item;
+  if (alwaysCounts(text, guard)) return false;
+  const priors = before
+    .filter((p) => p.label && Math.abs(p.x - element.x) <= SAME_SPOT_X && Math.abs(p.y - element.y) <= SAME_SPOT_Y)
+    .map((p) => stableText(p.label));
+  if (priors.some((was) => isReread(was, text))) return true;
+  if (!amount && priors.some((was) => isTick(was, text))) return true;
+  if (!statusArea || amount) return false;
+  const letters = lettersOf(text).length;
+  return letters === 0 || (letters === 1 && priors.length === 0);
+}
 
 /**
  * Compares two observations of "the same screen": refuses when new text
- * appeared (a dialog, another app) or most of the text is gone; ignores
- * numbers and times that tick, and items that only moved.
+ * appeared (a dialog, another app, a changed amount) or most of the text is
+ * gone. Ignores the status bar, numbers and times that tick, text cursors,
+ * items that only moved and OCR noise (see isOcrNoise). `guard` adds the live
+ * sensitive keywords and blocked apps to the texts that always count.
  */
-function screenDiff(before: ScreenDescription, fresh: ScreenDescription): string | null {
-  if (before.fingerprint === fresh.fingerprint) return null;
-  const texts = (d: ScreenDescription) =>
-    new Set(d.elements.map((e) => normalizeText(e.label)).filter((t) => t && !VOLATILE_TEXT.test(t)));
-  const was = texts(before);
-  const now = texts(fresh);
-  const added = [...now].filter((t) => !was.has(t));
-  if (added.length > 0) return `new text appeared (“${added[0]}”)`;
-  const removed = [...was].filter((t) => !now.has(t));
-  if (removed.length > Math.max(2, was.size / 3)) return 'most of the screen changed';
+export function screenDiff(before: ScreenDescription, fresh: ScreenDescription, guard: DiffGuard = {}): string | null {
+  // No shortcut on equal fingerprints: the fingerprint may be computed without
+  // the window size and so may skip a different status-bar row.
+  const was = diffItems(before, guard);
+  const now = diffItems(fresh, guard);
+  const wasTexts = new Set(was.map((i) => i.text));
+  const nowTexts = new Set(now.map((i) => i.text));
+  for (const item of now) {
+    if (wasTexts.has(item.text)) continue;
+    if (!isOcrNoise(item, before.elements, guard)) return `new text appeared (“${item.text}”)`;
+  }
+  const removed = [...wasTexts].filter((t) => !nowTexts.has(t));
+  if (removed.length > Math.max(2, wasTexts.size / 3)) return 'most of the screen changed';
   return null;
 }
 
 function sameLabel(a: string, b: string): boolean {
-  return normalizeText(a) === normalizeText(b);
+  return stableText(a) === stableText(b);
 }
 
 /** Told to the model with every observation while a blocked app is on screen. */

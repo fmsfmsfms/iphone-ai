@@ -43,6 +43,22 @@ const MIGRATIONS: readonly { id: string; apply(settings: AppSettings): void }[] 
       else if (screenshot.liveFps > MAX_LIVE_FPS) screenshot.liveFps = MAX_LIVE_FPS;
     },
   },
+  {
+    // 0.5.0: the payment rule also covers plain "Pay" buttons ("Pay SAR 49.00"), "Order now" and
+    // the Arabic order / pay words. Added to the user's payment rule if it still exists; the
+    // rule's other keywords, effect and on/off state are kept as the user left them.
+    id: '2026-10-payment-keywords',
+    apply(settings) {
+      const rules = settings.permissions.sensitiveRules;
+      const rule = Array.isArray(rules) ? rules.find((r) => r?.id === 'payment') : undefined;
+      if (!rule || !Array.isArray(rule.keywords)) return;
+      const key = (keyword: string) => keyword.normalize('NFKC').trim().toLowerCase();
+      const have = new Set(rule.keywords.map(key));
+      for (const keyword of ['pay', 'payment', 'order now', 'اطلب', 'أطلب', 'ادفع', 'الدفع']) {
+        if (!have.has(key(keyword))) rule.keywords.push(keyword);
+      }
+    },
+  },
 ];
 
 type SettingsListener = (next: AppSettings, previous: AppSettings) => void;

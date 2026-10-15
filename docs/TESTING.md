@@ -10,11 +10,11 @@ Three kinds of evidence are kept strictly apart:
 
 ## Automated suites
 
-Last full run: 2026-10-15, v0.4.0, with the official Node 22 toolchain (`source scripts/env.sh`).
+Last full run: 2026-10-15, v0.5.0, with the official Node 22 toolchain (`source scripts/env.sh`).
 
 | Suite | Command | Result |
 |---|---|---|
-| Backend unit + integration (MOCK) | `pnpm --filter @iphone-ai/server test` | 496 passed (38 files, incl. the real capture helper's --test-pattern against the backend parser) |
+| Backend unit + integration (MOCK) | `pnpm --filter @iphone-ai/server test` | 565 passed (41 files, incl. the real capture helper's --test-pattern against the backend parser, and approval re-checks replayed from recorded real-device screens) |
 | UI unit (jsdom) | `pnpm --filter @iphone-ai/web test` | 322 passed (33 files) |
 | Browser E2E (Playwright, MOCK backend + scripted model) | `pnpm test:e2e` | 24 passed (incl. the Live Control assistant panel: one scroller, approvals in view) |
 | Tauri shell (Rust) | `cd src-tauri && cargo test` | 21 passed; clippy and rustfmt clean |
@@ -86,9 +86,38 @@ and unified logs:**
   pointer click-drag. The task failed honestly ("the For You feed wouldn't move"). Fixed in
   v0.4.0 by going back to Mirroir `swipe` (the gesture that paged TikTok in v0.1.0).
 
+**v0.4.0 on the real iPhone (installed app, 2026-10-15):**
+
+- **Swiping works.** Claude (Supervised) "open tiktok and scroll for 20 videos": completed and
+  verified on screen, 21 swipes through the For You feed in 109 s (Mirroir swipe ≈2.4 s each,
+  ≈3.9 s per video including the AI's checks). 12 manual viewer swipes were delivered
+  (3.1–4.3 s each; they follow the speed of the user's drag).
+- A real ordering flow in Jahez (search, approvals for Return and taps) and "Add big mac"
+  (completed and verified). Live view 10 fps during video.
+- Defect: the post-approval screen check treated OCR noise (status-bar clock "3:17 a", a text
+  cursor "cheese|", fragments "29 ÷ ||", "jaû") as a screen change, so several approvals had
+  to be given twice. Fixed in v0.5.0 (position-aware re-check; see below).
+- Defect: Mirroir reports "paused" for a moment whenever the iPhone Mirroring window is active
+  under the pointer (its own toolbar buttons). The live-view safety net took that for a capture
+  conflict and switched the live view off for the session. Fixed in v0.5.0 (only a pause right
+  after capture starts, while connected, is probed, and it must happen twice).
+
+**v0.5.0 hardening (from v0.4.0's device session plus two adversarial reviews; mock-tested):**
+
+- Approval re-check: noise is ignored only where the same text was already at the same spot
+  (an OCR re-read, a blinking cursor, a counter tick) or in the status row anchored on the clock.
+  New text elsewhere, decision words ("OK", "Pay", "نعم", "دفع"), sensitive keywords, blocked-app
+  names and changed amounts ("SAR 49" → "SAR 149") always cancel the approval. Replaying the 81
+  recorded consecutive observations: the 4 noise refusals pass, the genuine screen change still
+  refuses. Every attack from the reviews (21 cases) is refused.
+- Pre-existing gaps closed: taps on unlabeled icons now get the sensitive/blocked-app checks;
+  a labelled target on a changed screen (same "Continue" on a payment step) is refused; "pay",
+  "payment", "order now", "اطلب", "ادفع", "الدفع" are payment keywords (added to existing
+  settings by a migration).
+- Live-view safety net: probes only within 8 s of capture start, measured from the onset and
+  never reopened by later reconnects; latches only on a second strike in a later helper session.
+
 **Not yet verified on the real iPhone:**
 
-- v0.4.0's swipes (Mirroir `swipe`, 300 ms, repeated with `times`) for the AI, workflows and the
-  viewer, and the viewer's speed-matched drags.
-- The launch hand-off from a copy in `~/Documents`, and the conflict safety net (it has not
-  been triggered on this Mac).
+- The launch hand-off from a copy in `~/Documents`. (The conflict safety net did trigger on the
+  real device on 2026-10-15 — falsely, on Mirroir's toolbar pauses; see above.)

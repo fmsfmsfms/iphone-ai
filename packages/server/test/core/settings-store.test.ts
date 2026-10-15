@@ -266,6 +266,51 @@ describe('persistence', () => {
     expect(reloaded.connection.requestTimeoutMs).toBe(60000);
   });
 
+  it('adds the 0.5.0 payment keywords to the payment rule once, keeping the user\'s edits', () => {
+    const NEW = ['pay', 'payment', 'order now', 'اطلب', 'أطلب', 'ادفع', 'الدفع'];
+    const payment = (s: AppSettings) => s.permissions.sensitiveRules.find((r) => r.id === 'payment');
+    /** Settings as 0.4.x stored them: the payment rule without the new keywords, before this migration. */
+    const storeOld = (edit: (rules: AppSettings['permissions']['sensitiveRules']) => void) => {
+      const old = createDefaultSettings();
+      const rule = payment(old)!;
+      rule.keywords = rule.keywords.filter((k) => !NEW.includes(k));
+      edit(old.permissions.sensitiveRules);
+      ctx.db.run("UPDATE settings SET value = ? WHERE key = 'app'", JSON.stringify(old));
+      ctx.db.run("UPDATE settings SET value = ? WHERE key = 'migrations'", JSON.stringify(['2026-10-faster-observation', '2026-10-live-snapshot-fps']));
+    };
+
+    // Still on the old defaults: becomes exactly the new default rule.
+    storeOld(() => undefined);
+    const defaults = payment(createDefaultSettings())!;
+    expect(payment(new SettingsStore(ctx.db).get())).toEqual(defaults);
+    expect(payment(storedRow(ctx.db))).toEqual(defaults);
+
+    // Customized: the user's keywords, effect and off switch are kept; only missing keywords are added.
+    storeOld((rules) => {
+      const rule = rules.find((r) => r.id === 'payment')!;
+      rule.keywords = ['buy', 'mada', 'PAY'];
+      rule.effect = 'deny';
+      rule.enabled = false;
+    });
+    expect(payment(new SettingsStore(ctx.db).get())).toMatchObject({
+      keywords: ['buy', 'mada', 'PAY', 'payment', 'order now', 'اطلب', 'أطلب', 'ادفع', 'الدفع'],
+      effect: 'deny',
+      enabled: false,
+    });
+
+    // The user deleted the payment rule: it is not brought back.
+    storeOld((rules) => rules.splice(rules.findIndex((r) => r.id === 'payment'), 1));
+    const loaded = new SettingsStore(ctx.db).get();
+    expect(payment(loaded)).toBeUndefined();
+    expect(loaded.permissions.sensitiveRules.map((r) => r.id)).toEqual(['auth', 'messaging', 'destructive', 'security']);
+
+    // Runs once: a keyword the user removes afterwards stays removed.
+    const store = new SettingsStore(ctx.db);
+    const rules = createDefaultSettings().permissions.sensitiveRules.map((r) => (r.id === 'payment' ? { ...r, keywords: ['buy'] } : r));
+    store.update({ permissions: { sensitiveRules: rules } });
+    expect(payment(new SettingsStore(ctx.db).get())!.keywords).toEqual(['buy']);
+  });
+
   it('never migrates a fresh install later (the old values chosen on purpose stick)', () => {
     ctx.settings.update({ ai: { settleDelayMs: 900 }, connection: { requestTimeoutMs: 60000 } });
     const reloaded = new SettingsStore(ctx.db).get();
