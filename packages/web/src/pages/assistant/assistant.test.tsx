@@ -3,10 +3,10 @@ import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import './messages';
-import { makeBootstrap, makeSettings, makeStep, makeTask } from '../../test/fixtures';
-import { appStore, reduceBootstrap, resetStoreForTests, setConnection, setTaskSteps, upsertTask } from '../../state/store';
+import { makeBootstrap, makeMessage, makeSettings, makeStep, makeTask } from '../../test/fixtures';
+import { TaskCard } from '../../components/chat';
+import { appStore, reduceBootstrap, replaceMessages, resetStoreForTests, setConnection, setTaskSteps, upsertTask } from '../../state/store';
 import { ConversationView } from './ConversationView';
-import { TaskBlock } from './TaskBlock';
 
 function jsonResponse(status: number, body: unknown): Response {
   return new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
@@ -27,28 +27,30 @@ afterEach(() => {
   resetStoreForTests();
 });
 
-describe('TaskBlock', () => {
+describe('TaskCard', () => {
   it('explains a failure and retries the same instruction', async () => {
     act(() => {
       appStore.setState((s) => reduceBootstrap(s, makeBootstrap({ settings: withKey(true) })));
       upsertTask(makeTask({ status: 'failed', instruction: 'Open Settings', error: 'Claude rate limit reached. Try again shortly.', endedAt: 5 }));
     });
     const onRetry = vi.fn().mockResolvedValue(undefined);
-    render(<TaskBlock taskId="task_1" defaultExpanded={false} onRetry={onRetry} />);
+    render(<TaskCard taskId="task_1" onRetry={onRetry} />);
     expect(screen.getByText('The AI provider is busy')).toBeInTheDocument();
     await userEvent.click(screen.getByRole('button', { name: /try again/i }));
     expect(onRetry).toHaveBeenCalledWith('Open Settings');
   });
 
-  it('shows the verification result and the steps of a completed task', async () => {
+  it('shows the verification result and, on request, the steps of a completed task', async () => {
     act(() => {
       upsertTask(makeTask({ status: 'completed', endedAt: 5, outcome: { success: true, verified: true, summary: 'Settings is open' } }));
       setTaskSteps('task_1', [makeStep({ id: 'st1', title: 'Tap “Settings”' })]);
     });
     vi.stubGlobal('fetch', vi.fn<typeof fetch>().mockResolvedValue(jsonResponse(200, { task: appStore.getState().tasks['task_1'], steps: [] })));
-    render(<TaskBlock taskId="task_1" defaultExpanded />);
+    render(<TaskCard taskId="task_1" />);
     expect(screen.getByText('Verified on screen')).toBeInTheDocument();
-    expect(screen.queryByText('The task failed')).not.toBeInTheDocument();
+    expect(screen.queryByRole('note')).not.toBeInTheDocument();
+    expect(screen.queryByText('Tap “Settings”')).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: 'Show 1 step' }));
     expect(await screen.findByText('Tap “Settings”')).toBeInTheDocument();
   });
 });
@@ -87,5 +89,29 @@ describe('ConversationView', () => {
     expect(screen.getByRole('textbox', { name: 'Instruction for the AI' })).toBeDisabled();
     expect(screen.getAllByText('iPhone Mirroring is paused. Lock your iPhone and keep it nearby, then click Resume in Live Control.').length).toBeGreaterThan(0);
     expect(screen.getByText(/can look and describe, but not tap/)).toBeInTheDocument();
+  });
+
+  it('shows a conversation as one thread: tasks inline, the summary once', () => {
+    const summary = 'Wallet is blocked by your safety settings.';
+    act(() => {
+      appStore.setState((s) => reduceBootstrap(s, makeBootstrap({ settings: withKey(true) })));
+      setConnection({ socket: 'open' });
+      replaceMessages('conv_1', [
+        makeMessage({ id: 'u1', text: 'Open Wallet.', taskId: 'task_1', createdAt: 1 }),
+        makeMessage({ id: 'a1', role: 'assistant', text: summary, taskId: 'task_1', createdAt: 2 }),
+      ]);
+      upsertTask(makeTask({ status: 'failed', instruction: 'Open Wallet.', endedAt: 5, outcome: { success: false, verified: false, summary }, error: summary }));
+    });
+    const conversation = { id: 'conv_1', title: 'Open Wallet.', createdAt: 1, updatedAt: 2 };
+    const { container } = render(<ConversationView conversation={conversation} onCreated={vi.fn()} onChanged={vi.fn()} onDelete={vi.fn()} />);
+    const log = screen.getByRole('log', { name: 'Conversation' });
+    expect(container.querySelectorAll('[role="log"]')).toHaveLength(1);
+    expect(log).toContainElement(screen.getByRole('region', { name: 'AI task' }));
+    expect(screen.getAllByText(summary)).toHaveLength(1);
+    // The reply already says why: the coloured status is all the card adds (the advice waits with the steps).
+    expect(screen.getByText('Failed', { exact: true })).toHaveClass('text-danger');
+    expect(screen.queryByRole('note')).not.toBeInTheDocument();
+    // A safety block is not worth retrying as is.
+    expect(screen.queryByRole('button', { name: /try again/i })).not.toBeInTheDocument();
   });
 });

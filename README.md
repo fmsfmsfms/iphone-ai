@@ -5,7 +5,7 @@ Monitor and control your **physical iPhone** from your Mac — by hand, with AI 
 Apple's **iPhone Mirroring** and your installed **[Mirroir MCP](https://mirroir.dev/)** server.
 
 - **Live Control** — see the phone screen live (ScreenCaptureKit, 10–15 fps, with
-  honest FPS/latency; polled screenshots as fallback), tap, flick, long-press, type and
+  honest FPS/latency; polled screenshots as fallback), tap, swipe, long-press, type and
   navigate from a phone-shaped viewer.
 - **AI Assistant** — "Open Settings", "Check my battery percentage", "Navigate to Wi-Fi
   settings"… The AI observes the real screen, acts one step at a time, re-checks the

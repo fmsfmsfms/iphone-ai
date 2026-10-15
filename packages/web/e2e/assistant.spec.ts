@@ -46,6 +46,14 @@ function taskSteps(page: Page): Locator {
   return page.getByRole('list', { name: 'Task steps' }).last();
 }
 
+/** Expands the newest task's steps (they are collapsed by default) and returns its timeline. */
+async function openSteps(page: Page): Promise<Locator> {
+  const toggle = page.getByRole('button', { name: /^Show( \d+)? steps?$/ }).last();
+  await toggle.click();
+  await expect(page.getByRole('button', { name: 'Hide steps' }).last()).toHaveAttribute('aria-expanded', 'true');
+  return taskSteps(page);
+}
+
 test('Supervised: the AI opens Settings, taps Wi-Fi and the result is verified on screen', async ({ page }) => {
   await scriptModel([
     { text: 'Opening Settings.', tool: 'open_app', args: { name: 'Settings', reason: 'Wi-Fi lives in Settings' } },
@@ -72,8 +80,9 @@ test('Supervised: the AI opens Settings, taps Wi-Fi and the result is verified o
   await expect(page.getByText('Verified on screen', { exact: true })).toBeVisible({ timeout: 45_000 });
   await expect(page.getByText('Completed', { exact: true }).first()).toBeVisible();
 
-  // The step timeline shows the real MCP tool calls and the verification.
-  const steps = taskSteps(page);
+  // The step timeline (collapsed once finished) shows the real MCP tool calls and the verification.
+  await expect(page.getByRole('list', { name: 'Task steps' })).toHaveCount(0);
+  const steps = await openSteps(page);
   await expect(steps.locator('code', { hasText: /^launch_app$/ })).toBeVisible();
   await expect(steps.locator('code', { hasText: /^tap$/ })).toBeVisible();
   await expect(steps.getByText('Finished — verified on screen')).toBeVisible();
@@ -115,7 +124,7 @@ test('Assisted: approving runs the action, rejecting does not', async ({ page })
   await waitForCall((c) => c.name === 'launch_app' && c.args.name === 'Settings', { since: mark, timeout: 20_000 });
   await expect(card).toBeHidden();
   await expect(page.getByText('Verified on screen', { exact: true })).toBeVisible({ timeout: 30_000 });
-  await expect(taskSteps(page).getByText(/^Approved: /)).toBeVisible();
+  await expect((await openSteps(page)).getByText(/^Approved: /)).toBeVisible();
 
   // Run 2 — reject (phone back on the Home Screen).
   writeMockState({ screen: 'home', resetSeq: Date.now() });
@@ -129,9 +138,12 @@ test('Assisted: approving runs the action, rejecting does not', async ({ page })
   await expect(card2).toBeVisible({ timeout: 30_000 });
   await card2.getByRole('button', { name: 'Reject' }).click();
   await expect(card2).toBeHidden();
-  await expect(taskSteps(page).getByText(/^Not approved \(rejected\): /)).toBeVisible({ timeout: 30_000 });
-  await expect(page.getByRole('note').filter({ hasText: /^The task failed/ })).toBeVisible({ timeout: 30_000 });
-  await expect(page.getByText('Failed', { exact: true }).last()).toBeVisible();
+  await expect(page.getByText('Failed', { exact: true }).last()).toBeVisible({ timeout: 30_000 });
+  // A quiet status with a retry on the newest task — no paragraph repeating the AI's reply, which says it once.
+  await expect(page.getByRole('button', { name: 'Try again' })).toHaveCount(1);
+  await expect(page.getByRole('note')).toHaveCount(0);
+  await expect(page.getByText('You rejected opening Settings.', { exact: true })).toHaveCount(1);
+  await expect((await openSteps(page)).getByText(/^Not approved \(rejected\): /)).toBeVisible({ timeout: 30_000 });
   await page.waitForTimeout(500);
   expect(callsSince(mark2, 'launch_app')).toEqual([]);
 });
@@ -151,8 +163,8 @@ test('an unanswered approval expires and counts as "no"', async ({ page }) => {
   await expect(card).toBeVisible({ timeout: 30_000 });
   await expect(card.getByText(/^0:(0\d|10)$/)).toBeVisible();
   await expect(card).toBeHidden({ timeout: 20_000 });
-  await expect(taskSteps(page).getByText(/^Not approved \(expired\): /)).toBeVisible({ timeout: 15_000 });
-  await expect(page.getByRole('note').filter({ hasText: 'The AI needs your help' })).toBeVisible({ timeout: 15_000 });
+  await expect(page.getByText('Needs you', { exact: true })).toBeVisible({ timeout: 15_000 });
+  await expect((await openSteps(page)).getByText(/^Not approved \(expired\): /)).toBeVisible({ timeout: 15_000 });
   const recent = await api<{ status: string }[]>(page, 'GET', '/api/approvals?status=recent');
   expect(recent[0]?.status).toBe('expired');
   expect(callsSince(mark).filter((c) => c.name === 'launch_app')).toEqual([]);
@@ -168,12 +180,17 @@ test('a blocked app is refused by policy and never launched', async ({ page }) =
   const mark = readCalls().length;
   await sendInstruction(page, 'Open Wallet.');
 
-  const steps = taskSteps(page);
+  const steps = await openSteps(page);
   await expect(steps.getByText(/^Blocked: /)).toBeVisible({ timeout: 30_000 });
   await expect(steps.getByText(/Safety rule ·/)).toBeVisible();
   await expect(steps.getByText(/blocked app/i).first()).toBeVisible();
   await expect(steps.getByText('Blocked by policy')).toBeVisible();
-  await expect(page.getByRole('note').filter({ hasText: 'A safety rule blocked the task' })).toBeVisible({ timeout: 30_000 });
+  // The reply says why (once); the card adds the status and, with the steps, what to do about it — no note, no retry.
+  await expect(page.getByText('Failed', { exact: true }).last()).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByText('Wallet is blocked by your safety settings.', { exact: true })).toHaveCount(1);
+  await expect(page.getByRole('note')).toHaveCount(0);
+  await expect(page.getByText(/isn’t allowed by your safety settings/)).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Try again' })).toHaveCount(0);
 
   await page.waitForTimeout(500);
   const calls = callsSince(mark);

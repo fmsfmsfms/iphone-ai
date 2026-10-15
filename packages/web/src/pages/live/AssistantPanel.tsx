@@ -1,21 +1,24 @@
 // Right panel of Live Control: a compact chat for the most recent
-// conversation (created when none exists), with pending approvals, the
-// current task's progress and latest steps, and the cloud privacy notice that
-// gates the composer like on the AI Assistant page.
+// conversation (created when none exists). One scroll area holds the whole
+// conversation — each AI task inline in its assistant turn, with its pending
+// approvals — plus, at the end, anything that needs attention but belongs to
+// no message here (an automation's approval, a task from another
+// conversation). The cloud privacy notice gates the composer like on the AI
+// Assistant page.
 
 import { ArrowUpRightFromSquare, CirclePlus, Sparkles, TriangleExclamation } from '@gravity-ui/icons';
-import { TERMINAL_TASK_STATUSES, type AgentTask, type Conversation } from '@iphone-ai/shared';
+import type { Conversation } from '@iphone-ai/shared';
 import { Button, Spinner } from '@heroui/react';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 
 import {
   ApprovalCard,
   ChatThread,
   CloudDisclosureNotice,
   Composer,
-  StepTimeline,
-  TaskProgress,
+  TaskCard,
   useComposerDisabledReason,
+  type TaskRenderContext,
 } from '../../components/chat';
 import { EmptyState } from '../../components/EmptyState';
 import { IconButton } from '../../components/IconButton';
@@ -27,29 +30,15 @@ import {
   loadConversation,
   notifyError,
   sendChatMessage,
-  shallowEqual,
   useActiveTask,
   useAppStore,
   useApprovals,
+  useCanControl,
+  useConversationMessages,
 } from '../../state/store';
 
 function pickMostRecent(list: Conversation[]): Conversation | null {
   return [...list].sort((a, b) => b.updatedAt - a.updatedAt)[0] ?? null;
-}
-
-function useLatestConversationTask(conversationId: string | null): AgentTask | null {
-  return useAppStore(
-    (s) => {
-      if (!conversationId) return null;
-      let latest: AgentTask | null = null;
-      for (const task of Object.values(s.tasks)) {
-        if (task.conversationId !== conversationId) continue;
-        if (!latest || task.createdAt > latest.createdAt) latest = task;
-      }
-      return latest;
-    },
-    shallowEqual,
-  );
 }
 
 export function AssistantPanel() {
@@ -60,8 +49,8 @@ export function AssistantPanel() {
   const [creating, setCreating] = useState(false);
   const approvals = useApprovals();
   const activeTask = useActiveTask();
-  const latestTask = useLatestConversationTask(conversation?.id ?? null);
-  const task = activeTask ?? latestTask;
+  const canControl = useCanControl();
+  const messages = useConversationMessages(conversation?.id);
   const disabledReason = useComposerDisabledReason();
   const mode = useAppStore((s) => s.settings?.permissions.controlMode ?? 'observe');
 
@@ -99,28 +88,76 @@ export function AssistantPanel() {
     }
   };
 
-  const send = async (text: string) => {
-    if (!conversation) return;
-    try {
-      await sendChatMessage(conversation.id, text);
-    } catch (err) {
-      notifyError(t('live.assistant.sendFailed'), err);
-      throw err;
-    }
-  };
+  const send = useCallback(
+    async (text: string) => {
+      if (!conversation) return;
+      try {
+        await sendChatMessage(conversation.id, text);
+      } catch (err) {
+        notifyError(t('live.assistant.sendFailed'), err);
+        throw err;
+      }
+    },
+    [conversation, t],
+  );
 
-  const taskIsTerminal = task ? TERMINAL_TASK_STATUSES.includes(task.status) : false;
+  // Tasks started by a message in this conversation are shown inline (with their approvals).
+  const threadTaskIds = useMemo(() => new Set(messages.flatMap((m) => (m.role === 'user' && m.taskId ? [m.taskId] : []))), [messages]);
+  const looseTask = activeTask && !threadTaskIds.has(activeTask.id) ? activeTask : null;
+  // The pane lists every pending approval (Watchers relies on it): the rest go after the conversation.
+  const looseApprovals = approvals.filter((a) => !(a.taskId && (threadTaskIds.has(a.taskId) || a.taskId === looseTask?.id)));
+
+  // Only the newest task offers "Try again": older ones stay quiet.
+  const renderTask = useCallback(
+    (taskId: string, { hasReply, reply, latest }: TaskRenderContext) => (
+      <TaskCard
+        taskId={taskId}
+        compact
+        showSummary={!hasReply}
+        reply={reply}
+        hideLiveAction
+        onRetry={canControl && latest ? send : undefined}
+        retryDisabledReason={disabledReason}
+      />
+    ),
+    [canControl, disabledReason, send],
+  );
+
+  const elsewhere =
+    looseTask || looseApprovals.length > 0 ? (
+      <div className="flex flex-col gap-4 border-t border-hairline pt-4">
+        {looseApprovals.length > 0 ? (
+          <Section title={t('live.assistant.approvals')}>
+            <div className="flex flex-col gap-2">
+              {looseApprovals.map((approval) => (
+                <ApprovalCard key={approval.id} approval={approval} compact />
+              ))}
+            </div>
+          </Section>
+        ) : null}
+        {looseTask ? (
+          <Section title={t('live.assistant.task')}>
+            <TaskCard taskId={looseTask.id} compact showInstruction showSummary hideLiveAction />
+          </Section>
+        ) : null}
+      </div>
+    ) : null;
 
   return (
     <div className="flex h-full min-h-0 flex-col" aria-label={t('live.panel.assistant')}>
-      <header className="flex items-center gap-2 border-b border-hairline px-4 py-3">
+      <header className="flex shrink-0 items-center gap-2 border-b border-hairline px-4 py-3">
         <span aria-hidden className="ai-gradient-bg flex size-7 shrink-0 items-center justify-center rounded-lg text-white [&>svg]:size-3.5">
           <Sparkles />
         </span>
         <div className="min-w-0 flex-1 leading-tight">
           <p className="text-[13px] font-semibold text-foreground">{t('live.assistant.title')}</p>
           <p className="truncate text-[11px] text-muted">
-            {conversation?.title ? `${conversation.title} · ` : ''}
+            {conversation?.title ? (
+              <>
+                <bdi>{conversation.title}</bdi>
+                {' · '}
+              </>
+            ) : null}
             {t('live.assistant.mode', { mode: t(`mode.${mode}.name`) })}
           </p>
         </div>
@@ -161,28 +198,12 @@ export function AssistantPanel() {
         </div>
       ) : (
         <>
-          {approvals.length > 0 || task ? (
-            <div className="app-scroll flex max-h-[55%] shrink-0 flex-col gap-4 border-b border-hairline p-3">
-              {approvals.length > 0 ? (
-                <Section title={t('live.assistant.approvals')}>
-                  <div className="flex flex-col gap-2">
-                    {approvals.map((approval) => (
-                      <ApprovalCard key={approval.id} approval={approval} compact />
-                    ))}
-                  </div>
-                </Section>
-              ) : null}
-              {task ? (
-                <Section title={taskIsTerminal ? t('live.assistant.lastTask') : t('live.assistant.task')}>
-                  <TaskProgress task={task} compact />
-                  <StepTimeline taskId={task.id} compact limit={5} className="mt-1" />
-                </Section>
-              ) : null}
-            </div>
-          ) : null}
           <ChatThread
             conversationId={conversation.id}
             compact
+            renderTask={renderTask}
+            footer={elsewhere}
+            attention={approvals.length > 0}
             empty={
               <EmptyState
                 size="sm"
@@ -194,7 +215,7 @@ export function AssistantPanel() {
               />
             }
           />
-          <div className="border-t border-hairline p-3">
+          <div className="shrink-0 border-t border-hairline p-3">
             <CloudDisclosureNotice compact className="mb-3" />
             <Composer compact onSend={send} disabledReason={disabledReason} placeholder={t('live.assistant.placeholder')} />
           </div>

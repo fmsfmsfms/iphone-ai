@@ -1,12 +1,13 @@
 // Pure mapping from viewer input to device actions.
 //
-// Mirroir's `swipe` is a synthesized trackpad scroll with a long momentum tail
-// (~2.3 s per swipe on a real device); its `drag` is a real touch drag (mouse
-// down → dragged frames over `duration_ms` → up, no initial hold), which iOS
-// treats like a finger. So every pointer drag on the viewer — a quick flick or
-// a slow drag — becomes a `drag` with the user's own start/end points and the
-// gesture's real duration. A press without movement stays a tap (or a
-// long-press / double-tap, per the touch mode). Arrow keys send centred flicks.
+// A pointer drag on the viewer becomes Mirroir's `swipe` (a synthesized
+// trackpad scroll) with the user's own start/end points and the gesture's real
+// duration: Mirroir gives a fast flick a momentum tail, which is what pages
+// feeds such as TikTok, and a slow drag scrolls without inertia. Mirroir's
+// `drag` is a pointer click-drag that iOS scroll views ignore (verified on a
+// real iPhone), so it is only sent in Long press mode, for sliders and the
+// like. A press without movement stays a tap (or a long-press / double-tap,
+// per the touch mode). Arrow keys send centred swipes.
 
 import type { DeviceAction } from '@iphone-ai/shared';
 
@@ -14,16 +15,16 @@ import { classifyGesture, roundTo, type Size, type WindowPoint } from './geometr
 
 export type TouchMode = 'tap' | 'long_press' | 'double_tap';
 
-/** A drag shorter than this is still sent as a 60 ms flick (Mirroir needs a few dragged frames). */
+/** A swipe or drag shorter than this is still sent as 60 ms (Mirroir needs a few frames). */
 export const DRAG_MIN_MS = 60;
-/** Slower drags are capped so one gesture never holds the device lane for long. */
+/** Slower gestures are capped so one gesture never holds the device lane for long. */
 export const DRAG_MAX_MS = 1500;
 export const LONG_PRESS_MIN_MS = 500;
 export const LONG_PRESS_MAX_MS = 3000;
 
-/** Keyboard flicks: drag this fraction of the screen, centred, in FLICK_DURATION_MS. */
+/** Keyboard flicks: swipe this fraction of the screen, centred, in FLICK_DURATION_MS (Mirroir's default, with momentum). */
 export const FLICK_FRACTION = 0.4;
-export const FLICK_DURATION_MS = 200;
+export const FLICK_DURATION_MS = 300;
 /** Flicks stay at least this far (points) from the screen edges (Home indicator, status bar, back gesture). */
 export const FLICK_EDGE_MARGIN_PT = 60;
 
@@ -59,7 +60,7 @@ export function pointerGestureAction(gesture: PointerGesture): DeviceAction | nu
   }
   if (!to) return null;
   return {
-    kind: 'drag',
+    kind: mode === 'long_press' ? 'drag' : 'swipe',
     fromX: from.x,
     fromY: from.y,
     toX: to.x,
@@ -92,8 +93,8 @@ function clampToScreen(value: number, length: number): number {
 }
 
 /**
- * A finger flick across ~40% of the screen, centred, in 200 ms. `window` is the
- * Mirroir window size in points; returns null when it is unknown.
+ * A swipe with flick momentum across ~40% of the screen, centred, in 300 ms.
+ * `window` is the Mirroir window size in points; returns null when it is unknown.
  */
 export function flickAction(direction: FlickDirection, window: Size | null | undefined): DeviceAction | null {
   if (!window || !(window.width > 0 && window.height > 0)) return null;
@@ -122,7 +123,7 @@ export function flickAction(direction: FlickDirection, window: Size | null | und
       break;
   }
   return {
-    kind: 'drag',
+    kind: 'swipe',
     fromX: clampToScreen(from.x, window.width),
     fromY: clampToScreen(from.y, window.height),
     toX: clampToScreen(to.x, window.width),

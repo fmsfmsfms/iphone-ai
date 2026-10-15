@@ -1,14 +1,14 @@
-// The AI "swipe" tool: a finger flick through Mirroir's `drag` (a real touch
-// drag) instead of Mirroir's `swipe` (a trackpad scroll with a momentum tail),
-// optionally repeated (`times`) with one observation at the end. Fake device;
-// no Mirroir, no phone.
+// The AI "swipe" tool: Mirroir's `swipe` (a trackpad scroll whose momentum
+// tail pages feeds; Mirroir's `drag` is a pointer click-drag that iOS scroll
+// views ignore), optionally repeated (`times`) with one observation at the end.
+// Fake device; no Mirroir, no phone.
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import type { ActionResult, DeviceAction, ScreenDescription } from '@iphone-ai/shared';
 
 import { agentSystemPrompt } from '../../src/ai/agent/prompts.js';
-import { AgentToolkit, FLICK_MARGIN_X, FLICK_MARGIN_Y, swipeAction, type ToolkitTask } from '../../src/ai/agent/toolkit.js';
+import { AgentToolkit, SWIPE_MARGIN_X, SWIPE_MARGIN_Y, swipeAction, type ToolkitTask } from '../../src/ai/agent/toolkit.js';
 import { ScreenshotStore } from '../../src/ai/screenshots.js';
 import type { ModelContent } from '../../src/ai/types.js';
 import { DeviceError, type ActionContext, type DeviceController } from '../../src/device/device-controller.js';
@@ -60,7 +60,7 @@ function makeKit(
     perform: async (action: DeviceAction, context: ActionContext) => {
       performed.push({ action, ctx: context, at: Date.now() });
       if (options.perform) return options.perform(action, context, performed.length);
-      return { ok: true, tool: 'drag', durationMs: 200, message: 'Dragged from (205,629) to (205,269) over 200ms', focusChanged: true };
+      return { ok: true, tool: 'swipe', durationMs: 300, message: 'Swiped from (205,629) to (205,269)', focusChanged: true };
     },
     geometry: makeGeometry(410, 898, 'portrait'),
     isStopLatched: false,
@@ -93,17 +93,17 @@ const text = (out: { content: ModelContent[] }) =>
     .map((c) => c.text)
     .join('\n');
 
-describe('swipeAction (flick geometry)', () => {
-  it('flicks through the middle with 25/40/55% travel and 160/200/240 ms', () => {
-    expect(swipeAction('up', 'medium', 410, 898)).toEqual({ kind: 'drag', fromX: 205, fromY: 629, toX: 205, toY: 269, durationMs: 200, asSwipe: true });
-    expect(swipeAction('up', 'short', 410, 898)).toEqual({ kind: 'drag', fromX: 205, fromY: 561, toX: 205, toY: 337, durationMs: 160, asSwipe: true });
-    expect(swipeAction('up', 'long', 410, 898)).toEqual({ kind: 'drag', fromX: 205, fromY: 696, toX: 205, toY: 202, durationMs: 240, asSwipe: true });
-    expect(swipeAction('down', 'medium', 410, 898)).toEqual({ kind: 'drag', fromX: 205, fromY: 269, toX: 205, toY: 629, durationMs: 200, asSwipe: true });
-    expect(swipeAction('left', 'long', 410, 898)).toEqual({ kind: 'drag', fromX: 318, fromY: 449, toX: 92, toY: 449, durationMs: 240, asSwipe: true });
-    expect(swipeAction('right', 'short', 410, 898)).toEqual({ kind: 'drag', fromX: 154, fromY: 449, toX: 256, toY: 449, durationMs: 160, asSwipe: true });
+describe('swipeAction (swipe geometry)', () => {
+  it('swipes through the middle with 25/40/55% travel in 300 ms', () => {
+    expect(swipeAction('up', 'medium', 410, 898)).toEqual({ kind: 'swipe', fromX: 205, fromY: 629, toX: 205, toY: 269, durationMs: 300 });
+    expect(swipeAction('up', 'short', 410, 898)).toEqual({ kind: 'swipe', fromX: 205, fromY: 561, toX: 205, toY: 337, durationMs: 300 });
+    expect(swipeAction('up', 'long', 410, 898)).toEqual({ kind: 'swipe', fromX: 205, fromY: 696, toX: 205, toY: 202, durationMs: 300 });
+    expect(swipeAction('down', 'medium', 410, 898)).toEqual({ kind: 'swipe', fromX: 205, fromY: 269, toX: 205, toY: 629, durationMs: 300 });
+    expect(swipeAction('left', 'long', 410, 898)).toEqual({ kind: 'swipe', fromX: 318, fromY: 449, toX: 92, toY: 449, durationMs: 300 });
+    expect(swipeAction('right', 'short', 410, 898)).toEqual({ kind: 'swipe', fromX: 154, fromY: 449, toX: 256, toY: 449, durationMs: 300 });
   });
 
-  it('keeps every flick at least 60 pt from the top and bottom (and clear of the side edges)', () => {
+  it('keeps every swipe at least 60 pt from the top and bottom (and clear of the side edges)', () => {
     const sizes: [number, number][] = [
       [410, 898],
       [430, 932],
@@ -117,12 +117,12 @@ describe('swipeAction (flick geometry)', () => {
         for (const distance of ['short', 'medium', 'long'] as const) {
           const a = swipeAction(direction, distance, w, h);
           for (const y of [a.fromY, a.toY]) {
-            expect(y).toBeGreaterThanOrEqual(Math.min(FLICK_MARGIN_Y, h / 2));
-            expect(y).toBeLessThanOrEqual(Math.max(h - FLICK_MARGIN_Y, h / 2));
+            expect(y).toBeGreaterThanOrEqual(Math.min(SWIPE_MARGIN_Y, h / 2));
+            expect(y).toBeLessThanOrEqual(Math.max(h - SWIPE_MARGIN_Y, h / 2));
           }
           for (const x of [a.fromX, a.toX]) {
-            expect(x).toBeGreaterThanOrEqual(FLICK_MARGIN_X);
-            expect(x).toBeLessThanOrEqual(w - FLICK_MARGIN_X);
+            expect(x).toBeGreaterThanOrEqual(SWIPE_MARGIN_X);
+            expect(x).toBeLessThanOrEqual(w - SWIPE_MARGIN_X);
           }
           // Still a movement in the requested direction.
           if (direction === 'up') expect(a.toY).toBeLessThan(a.fromY);
@@ -136,7 +136,7 @@ describe('swipeAction (flick geometry)', () => {
 });
 
 describe('AI swipe tool', () => {
-  it('flicks with Mirroir drag (not the scroll-wheel swipe), governed by the "swipe" permission', async () => {
+  it('swipes with Mirroir swipe (not a click-drag), governed by the "swipe" permission', async () => {
     // Default allowed AI tools include "swipe" but not "drag".
     expect(ctx.settings.get().permissions.aiAllowedTools).toContain('swipe');
     expect(ctx.settings.get().permissions.aiAllowedTools).not.toContain('drag');
@@ -145,12 +145,12 @@ describe('AI swipe tool', () => {
     const out = await k.kit.execute({ id: 's', name: 'swipe', args: { direction: 'up', reason: 'next video' } });
     expect(out.isError).toBe(false);
     expect(k.performed).toHaveLength(1);
-    expect(k.performed[0]!.action).toEqual({ kind: 'drag', fromX: 205, fromY: 629, toX: 205, toY: 269, durationMs: 200, asSwipe: true });
+    expect(k.performed[0]!.action).toEqual({ kind: 'swipe', fromX: 205, fromY: 629, toX: 205, toY: 269, durationMs: 300 });
     expect(k.performed[0]!.ctx.decision.verdict).toBe('allow');
-    expect(text(out)).toContain('Action: Flick from (205, 629) to (205, 269)');
+    expect(text(out)).toContain('Action: Swipe from (205, 629) to (205, 269)');
   });
 
-  it('is not offered, and a flick is refused, when "swipe" is not an allowed AI tool', async () => {
+  it('is not offered, and a swipe is refused, when "swipe" is not an allowed AI tool', async () => {
     ctx.settings.update({ permissions: { aiAllowedTools: ['tap', 'drag'] } });
     const k = makeKit();
     expect(k.kit.toolNames()).not.toContain('swipe');
@@ -165,13 +165,13 @@ describe('AI swipe tool', () => {
     const props = (def.parameters as { properties: Record<string, { minimum?: number; maximum?: number }> }).properties;
     expect(props.times).toMatchObject({ minimum: 1, maximum: 10 });
     expect(props.interval_ms).toMatchObject({ minimum: 300, maximum: 3000 });
-    expect(def.description).toMatch(/flick/i);
+    expect(def.description).toMatch(/momentum/i);
     const prompt = agentSystemPrompt({ mode: 'supervised', maxActions: 25, vision: true, tools: ['swipe'] });
-    expect(prompt).toMatch(/swipe is a quick finger flick/);
+    expect(prompt).toMatch(/swipe scrolls across the middle of the screen with flick momentum/);
     expect(prompt).toMatch(/times/);
   });
 
-  it('repeats the flick `times` times, interval_ms apart, with ONE observation at the end', async () => {
+  it('repeats the swipe `times` times, interval_ms apart, with ONE observation at the end', async () => {
     const k = makeKit({ screens: (n) => screen(n === 0 ? 'video-1' : 'video-4') });
     await k.kit.observe();
     expect(k.describes()).toBe(1);
@@ -185,8 +185,8 @@ describe('AI swipe tool', () => {
     expect(Date.now() - started).toBeGreaterThanOrEqual(600);
     expect(k.kit.actionCount).toBe(3);
     const body = text(out);
-    expect(body).toContain('Action: Flick from (205, 629) to (205, 269) ×3');
-    expect(body).toContain('Performed 3 flicks, 300 ms apart.');
+    expect(body).toContain('Action: Swipe from (205, 629) to (205, 269) ×3');
+    expect(body).toContain('Performed 3 swipes, 300 ms apart.');
     expect(body).toContain('Screen changed: yes');
     expect(body).toContain('Actions used: 3/25.');
   });
@@ -196,20 +196,20 @@ describe('AI swipe tool', () => {
     await k.kit.observe();
     const out = await k.kit.execute({ id: 's', name: 'swipe', args: { direction: 'up', times: 5, interval_ms: 300, reason: 'page' } });
     expect(k.performed).toHaveLength(2);
-    expect(text(out)).toContain('Performed 2 of 5 flicks (stopped: the action budget (2 actions) is used up).');
+    expect(text(out)).toContain('Performed 2 of 5 swipes (stopped: the action budget (2 actions) is used up).');
   });
 
   it('re-checks the policy before every repetition (switching to Observe Only stops the rest)', async () => {
     const k = makeKit({
       perform: (_action, _context, n) => {
         if (n === 1) ctx.settings.update({ permissions: { controlMode: 'observe' } });
-        return { ok: true, tool: 'drag', durationMs: 200, message: 'Dragged', focusChanged: true };
+        return { ok: true, tool: 'swipe', durationMs: 300, message: 'Swiped', focusChanged: true };
       },
     });
     await k.kit.observe();
     const out = await k.kit.execute({ id: 's', name: 'swipe', args: { direction: 'up', times: 3, interval_ms: 300, reason: 'page' } });
     expect(k.performed).toHaveLength(1);
-    expect(text(out)).toMatch(/Performed 1 of 3 flicks \(stopped: blocked by iPhone AI's safety policy \(Observe Only mode/);
+    expect(text(out)).toMatch(/Performed 1 of 3 swipes \(stopped: blocked by iPhone AI's safety policy \(Observe Only mode/);
   });
 
   it('asks for ONE approval covering all repetitions in Assisted Control', async () => {
@@ -220,8 +220,8 @@ describe('AI swipe tool', () => {
     for (let i = 0; i < 100 && k.approvals.listPending().length === 0; i += 1) await new Promise((r) => setTimeout(r, 10));
     const pending = k.approvals.listPending();
     expect(pending).toHaveLength(1);
-    expect(pending[0]!.summary).toMatch(/Flick .* — up \(medium\) ×3/);
-    expect(pending[0]!.action.args).toMatchObject({ times: 3, intervalMs: 300, asSwipe: true });
+    expect(pending[0]!.summary).toMatch(/Swipe .* — up \(medium\) ×3/);
+    expect(pending[0]!.action.args).toMatchObject({ times: 3, intervalMs: 300 });
     k.approvals.decide(pending[0]!.id, 'approved', 'user');
     const out = await running;
     expect(out.isError).toBe(false);
@@ -231,7 +231,7 @@ describe('AI swipe tool', () => {
     expect(k.approvals.listPending()).toHaveLength(0);
   });
 
-  it('counts a repeated flick once for loop detection on an unchanged screen', async () => {
+  it('counts a repeated swipe once for loop detection on an unchanged screen', async () => {
     const k = makeKit();
     await k.kit.observe();
     const args = { direction: 'up', times: 2, interval_ms: 300, reason: 'page' };
@@ -243,11 +243,11 @@ describe('AI swipe tool', () => {
     expect(k.performed).toHaveLength(4);
   });
 
-  it('reports the flicks that ran when a later one fails, with a fresh observation', async () => {
+  it('reports the swipes that ran when a later one fails, with a fresh observation', async () => {
     const k = makeKit({
       perform: (_action, _context, n) => {
         if (n === 2) throw new DeviceError('iPhone Mirroring is not connected (No window).', 'not_connected');
-        return { ok: true, tool: 'drag', durationMs: 200, message: 'Dragged', focusChanged: true };
+        return { ok: true, tool: 'swipe', durationMs: 300, message: 'Swiped', focusChanged: true };
       },
     });
     await k.kit.observe();
@@ -255,6 +255,6 @@ describe('AI swipe tool', () => {
     expect(k.performed).toHaveLength(2);
     expect(k.kit.actionCount).toBe(1);
     expect(k.describes()).toBe(2);
-    expect(text(out)).toContain('Performed 1 of 3 flicks (stopped: iPhone Mirroring is not connected (No window).).');
+    expect(text(out)).toContain('Performed 1 of 3 swipes (stopped: iPhone Mirroring is not connected (No window).).');
   });
 });

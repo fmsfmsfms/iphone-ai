@@ -1,18 +1,13 @@
 // Pure helpers for the AI Assistant page: conversation titles and grouping,
-// approvals placed into the step timeline, readable failure explanations and
-// why a new instruction can't be sent.
+// and why a new instruction can't be sent. Readable failure explanations live
+// with the shared chat components.
 
-import type {
-  AgentStep,
-  AgentTask,
-  AppSettings,
-  ApprovalRequest,
-  Conversation,
-  DeviceStatus,
-} from '@iphone-ai/shared';
+import type { AgentTask, AppSettings, Conversation, DeviceStatus } from '@iphone-ai/shared';
 
 import type { SessionInfo } from '../../lib/api';
 import { composerDisabledReason, providerReadiness } from '../../lib/device-state';
+
+export { explainTaskFailure, type FailureAction, type FailureExplanation, type FailureKind } from '../../components/chat/task-ui';
 
 /** Title the backend gives new conversations; it is replaced by the first message. */
 export const DEFAULT_CONVERSATION_TITLE = 'New conversation';
@@ -61,131 +56,6 @@ export function nextConversationAfterRemoval(list: readonly Conversation[], remo
   const rest = list.filter((c) => c.id !== removedId);
   if (rest.length === 0) return null;
   return rest[Math.min(Math.max(index, 0), rest.length - 1)] ?? null;
-}
-
-// ---------------------------------------------------------------------------
-// Timeline
-// ---------------------------------------------------------------------------
-
-export type TimelineItem = { kind: 'steps'; key: string; steps: AgentStep[] } | { kind: 'approval'; key: string; approval: ApprovalRequest };
-
-/**
- * Splits a task's steps into runs separated by pending approvals, so each
- * approval card appears at the point in the timeline where it was requested.
- */
-export function interleaveApprovals(steps: readonly AgentStep[], approvals: readonly ApprovalRequest[]): TimelineItem[] {
-  const sortedApprovals = [...approvals].sort((a, b) => a.createdAt - b.createdAt);
-  const items: TimelineItem[] = [];
-  let current: AgentStep[] = [];
-  let ai = 0;
-  const flush = () => {
-    if (current.length > 0) {
-      items.push({ kind: 'steps', key: `steps-${current[0]!.id}`, steps: current });
-      current = [];
-    }
-  };
-  for (const step of steps) {
-    while (ai < sortedApprovals.length && sortedApprovals[ai]!.createdAt < step.createdAt) {
-      flush();
-      const approval = sortedApprovals[ai]!;
-      items.push({ kind: 'approval', key: `approval-${approval.id}`, approval });
-      ai += 1;
-    }
-    current.push(step);
-  }
-  flush();
-  for (; ai < sortedApprovals.length; ai += 1) {
-    const approval = sortedApprovals[ai]!;
-    items.push({ kind: 'approval', key: `approval-${approval.id}`, approval });
-  }
-  return items;
-}
-
-// ---------------------------------------------------------------------------
-// Failures
-// ---------------------------------------------------------------------------
-
-export type FailureKind =
-  | 'cancelled'
-  | 'emergencyStop'
-  | 'stopped'
-  | 'timeout'
-  | 'stepLimit'
-  | 'loop'
-  | 'auth'
-  | 'config'
-  | 'rateLimit'
-  | 'network'
-  | 'refusal'
-  | 'needsUser'
-  | 'mirroring'
-  | 'permission'
-  | 'mcp'
-  | 'policy'
-  | 'unsuccessful'
-  | 'generic';
-
-export type FailureAction = 'settings-ai' | 'live' | 'dashboard' | null;
-
-export interface FailureExplanation {
-  kind: FailureKind;
-  titleKey: string;
-  bodyKey: string;
-  /** Whether sending the same instruction again is a sensible next step. */
-  canRetry: boolean;
-  action: FailureAction;
-}
-
-const PATTERNS: readonly [FailureKind, RegExp][] = [
-  ['emergencyStop', /emergency stop/i],
-  ['auth', /api key|not signed in|sign in|log ?in|unauthori[sz]ed|authentication|\b401\b|\b403\b/i],
-  ['config', /settings\s*→\s*ai|choose a model|no model id|model not found|base url|server url|is disabled/i],
-  ['rateLimit', /rate limit|\b429\b|overloaded|\b529\b/i],
-  ['network', /cannot reach|can['’]t reach|not reachable|econnrefused|enotfound|fetch failed|network|connection (refused|reset|error)/i],
-  ['timeout', /time limit|timed out|timeout/i],
-  ['stepLimit', /step limit|action budget|max(imum)? actions/i],
-  ['loop', /kept repeating|loop/i],
-  ['refusal', /declined/i],
-  ['needsUser', /needs your help/i],
-  ['permission', /screen recording|accessibility permission/i],
-  ['mirroring', /iphone mirroring|mirroring is|paused|not connected/i],
-  ['mcp', /mirroir|mcp/i],
-  ['policy', /blocked|not allowed|denied|policy/i],
-];
-
-function explanation(kind: FailureKind, canRetry: boolean, action: FailureAction = null): FailureExplanation {
-  return { kind, titleKey: `assistant.failure.${kind}.title`, bodyKey: `assistant.failure.${kind}.body`, canRetry, action };
-}
-
-const ACTIONS: Partial<Record<FailureKind, FailureAction>> = {
-  auth: 'settings-ai',
-  config: 'settings-ai',
-  mirroring: 'live',
-  permission: 'dashboard',
-  mcp: 'dashboard',
-};
-
-const NO_RETRY: ReadonlySet<FailureKind> = new Set(['auth', 'config', 'permission', 'policy', 'refusal']);
-
-/** Readable explanation for a task that did not complete successfully (null when it did, or is still running). */
-export function explainTaskFailure(task: Pick<AgentTask, 'status' | 'error' | 'outcome'>): FailureExplanation | null {
-  switch (task.status) {
-    case 'cancelled':
-      return explanation('cancelled', true);
-    case 'stopped':
-      return /emergency stop/i.test(task.error ?? '') ? explanation('emergencyStop', true) : explanation('stopped', true);
-    case 'completed':
-      return task.outcome && !task.outcome.success ? explanation('unsuccessful', true) : null;
-    case 'failed': {
-      const text = `${task.error ?? ''} ${task.outcome?.summary ?? ''}`;
-      for (const [kind, pattern] of PATTERNS) {
-        if (pattern.test(text)) return explanation(kind, !NO_RETRY.has(kind), ACTIONS[kind] ?? null);
-      }
-      return explanation('generic', true);
-    }
-    default:
-      return null;
-  }
 }
 
 // ---------------------------------------------------------------------------

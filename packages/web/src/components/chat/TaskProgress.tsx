@@ -1,7 +1,8 @@
-// Status of one AI task: state, provider/model, action budget, current
-// activity, outcome — with pause / resume / cancel. Pausing and cancelling
-// only reduce what the AI does, so every session (view-only too) gets them;
-// resuming needs a session that can control.
+// Status of one AI task as a standalone card (Dashboard): state,
+// provider/model, action budget, current activity, outcome — with pause /
+// resume / cancel. Pausing and cancelling only reduce what the AI does, so
+// every session (view-only too) gets them; resuming needs a session that can
+// control. Inside a conversation, TaskCard shows the task inline instead.
 
 import { CircleCheckFill, CirclePause, CirclePlay, CircleXmark, Sparkles, TriangleExclamation } from '@gravity-ui/icons';
 import { TERMINAL_TASK_STATUSES, type AgentTask } from '@iphone-ai/shared';
@@ -125,7 +126,8 @@ export function TaskProgress({ task, compact, className }: TaskProgressProps) {
         </div>
       ) : null}
 
-      {task.error ? (
+      {/* The backend often stores the same text as error and outcome summary: show it once. */}
+      {task.error && !(terminal && task.outcome && task.outcome.summary.trim() === task.error.trim()) ? (
         <p role="alert" dir="auto" className="mt-3 rounded-xl bg-danger/10 px-2.5 py-2 text-[13px] text-danger">
           {task.error}
         </p>

@@ -249,6 +249,11 @@ export function makeToast(level: ToastLevel, title: string, message: string | un
 }
 
 function withTask(state: StoreState, task: AgentTask): Partial<StoreState> {
+  // A finished task never becomes unfinished again: an action's HTTP response
+  // (e.g. cancel) can carry the task as it was before the server finished it,
+  // and arrive after the server's "cancelled" update.
+  const current = state.tasks[task.id];
+  if (current && isTerminalTask(current) && !isTerminalTask(task)) return {};
   const tasks = { ...state.tasks, [task.id]: task };
   let activeTaskId = state.activeTaskId;
   if (!isTerminalTask(task)) activeTaskId = task.id;

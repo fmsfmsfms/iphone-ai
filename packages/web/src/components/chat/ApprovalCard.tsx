@@ -60,8 +60,12 @@ export function ApprovalCard({ approval, compact, className }: ApprovalCardProps
   return (
     <article
       aria-label={t('approval.label')}
+      // The conversation finds pending cards by this (to bring a new one into view, and for its
+      // "Approval needed" button, which moves focus here).
+      data-pending-approval={expired ? undefined : approval.id}
+      tabIndex={-1}
       className={[
-        'rounded-2xl border bg-surface-secondary',
+        'rounded-2xl border bg-surface-secondary outline-none focus-visible:ring-2 focus-visible:ring-focus',
         RISK_BORDER[approval.risk],
         compact ? 'p-3' : 'p-4',
         className ?? '',
@@ -97,9 +101,10 @@ export function ApprovalCard({ approval, compact, className }: ApprovalCardProps
       </header>
 
       {approval.reasons.length > 0 ? (
-        <ul className="mt-2.5 space-y-1 ps-10 text-xs leading-relaxed text-muted">
+        // Each reason keeps the room for its bullet on its own start side (an English reason in the Arabic UI too).
+        <ul className="mt-2.5 ms-6 space-y-1 text-xs leading-relaxed text-muted">
           {approval.reasons.map((reason, i) => (
-            <li key={i} className="list-disc" dir="auto">
+            <li key={i} className="ms-4 list-disc" dir="auto">
               {reason}
             </li>
           ))}

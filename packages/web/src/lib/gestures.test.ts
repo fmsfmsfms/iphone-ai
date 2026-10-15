@@ -26,18 +26,19 @@ describe('pointerGestureAction', () => {
     expect(pointerGestureAction({ mode: 'long_press', from, to: from, travelPx: 2, elapsedMs: 9000 })).toMatchObject({ durationMs: 3000 });
   });
 
-  it('sends every drag — quick or slow — as a real touch drag with the user’s own points', () => {
+  it('sends a drag as a Mirroir swipe with the user’s own points and speed (a click-drag in Long press mode)', () => {
     expect(pointerGestureAction({ mode: 'tap', from, to, travelPx: 150, elapsedMs: 180 })).toEqual({
-      kind: 'drag',
+      kind: 'swipe',
       fromX: 205,
       fromY: 600,
       toX: 205,
       toY: 300,
       durationMs: 180,
     });
-    // Slow drags are drags too (no trackpad-scroll "swipe" from the viewer), whatever the touch mode.
+    // Slow drags are swipes too: Mirroir drops the momentum tail for slow ones.
+    expect(pointerGestureAction({ mode: 'double_tap', from, to, travelPx: 150, elapsedMs: 900 })).toMatchObject({ kind: 'swipe', durationMs: 900 });
+    // Long press mode keeps the pointer click-drag (sliders); iOS scroll views ignore it.
     expect(pointerGestureAction({ mode: 'long_press', from, to, travelPx: 150, elapsedMs: 900 })).toMatchObject({ kind: 'drag', durationMs: 900 });
-    expect(pointerGestureAction({ mode: 'double_tap', from, to, travelPx: 150, elapsedMs: 700 })).toMatchObject({ kind: 'drag' });
   });
 
   it('clamps the drag duration to 60–1500 ms (whole milliseconds)', () => {
@@ -72,18 +73,18 @@ describe('keyboard flicks', () => {
     expect(flickDirectionForKey('w')).toBeNull();
   });
 
-  it('flicks 40% of the screen, centred, in 200 ms (ArrowUp = finger moves up = next item)', () => {
+  it('swipes 40% of the screen, centred, in 300 ms (ArrowUp = finger moves up = next item)', () => {
     const window = { width: 410, height: 890 };
-    expect(FLICK_DURATION_MS).toBe(200);
-    expect(flickAction('up', window)).toEqual({ kind: 'drag', fromX: 205, fromY: 623, toX: 205, toY: 267, durationMs: 200 });
-    expect(flickAction('down', window)).toEqual({ kind: 'drag', fromX: 205, fromY: 267, toX: 205, toY: 623, durationMs: 200 });
-    expect(flickAction('left', window)).toEqual({ kind: 'drag', fromX: 287, fromY: 445, toX: 123, toY: 445, durationMs: 200 });
-    expect(flickAction('right', window)).toEqual({ kind: 'drag', fromX: 123, fromY: 445, toX: 287, toY: 445, durationMs: 200 });
+    expect(FLICK_DURATION_MS).toBe(300);
+    expect(flickAction('up', window)).toEqual({ kind: 'swipe', fromX: 205, fromY: 623, toX: 205, toY: 267, durationMs: 300 });
+    expect(flickAction('down', window)).toEqual({ kind: 'swipe', fromX: 205, fromY: 267, toX: 205, toY: 623, durationMs: 300 });
+    expect(flickAction('left', window)).toEqual({ kind: 'swipe', fromX: 287, fromY: 445, toX: 123, toY: 445, durationMs: 300 });
+    expect(flickAction('right', window)).toEqual({ kind: 'swipe', fromX: 123, fromY: 445, toX: 287, toY: 445, durationMs: 300 });
   });
 
   it('works in landscape and keeps at least 60 pt from the top and bottom edges', () => {
     const landscape = flickAction('up', { width: 890, height: 410 });
-    expect(landscape).toEqual({ kind: 'drag', fromX: 445, fromY: 287, toX: 445, toY: 123, durationMs: 200 });
+    expect(landscape).toEqual({ kind: 'swipe', fromX: 445, fromY: 287, toX: 445, toY: 123, durationMs: 300 });
     // A short window: 40% would reach into the margins, so the points are pulled in.
     expect(flickAction('up', { width: 300, height: 250 })).toMatchObject({ fromY: 175, toY: 75 });
     expect(flickAction('up', { width: 300, height: 160 })).toMatchObject({ fromY: 100, toY: 60 });
@@ -91,8 +92,8 @@ describe('keyboard flicks', () => {
     expect(tiny).toMatchObject({ fromY: 50, toY: 50 });
     for (const dir of ['up', 'down'] as const) {
       const a = flickAction(dir, { width: 375, height: 667 });
-      expect(a && a.kind === 'drag' ? Math.min(a.fromY, a.toY) : 0).toBeGreaterThanOrEqual(60);
-      expect(a && a.kind === 'drag' ? 667 - Math.max(a.fromY, a.toY) : 0).toBeGreaterThanOrEqual(60);
+      expect(a && a.kind === 'swipe' ? Math.min(a.fromY, a.toY) : 0).toBeGreaterThanOrEqual(60);
+      expect(a && a.kind === 'swipe' ? 667 - Math.max(a.fromY, a.toY) : 0).toBeGreaterThanOrEqual(60);
     }
   });
 

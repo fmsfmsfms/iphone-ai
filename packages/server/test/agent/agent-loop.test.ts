@@ -42,7 +42,7 @@ describe('AI task loop (scripted model × mock Mirroir)', () => {
       expect(messages.map((m) => m.role)).toEqual(['user', 'assistant']);
     });
 
-    it('swipes with a finger flick (Mirroir drag, 200 ms), never the scroll-wheel swipe, and repeats with one observation', async () => {
+    it('swipes with Mirroir swipe (300 ms, momentum pages feeds), never a click-drag, and repeats with one observation', async () => {
       h.setScript(({ turn }) => {
         if (turn === 0) return { toolCalls: [call('swipe', { direction: 'up', reason: 'scroll down' })] };
         if (turn === 1) return { toolCalls: [call('swipe', { direction: 'up', times: 2, interval_ms: 300, reason: 'page twice' })] };
@@ -52,21 +52,22 @@ describe('AI task loop (scripted model × mock Mirroir)', () => {
       const { task } = await h.agents.startTask(conversation.id, { text: 'Scroll down.' }, 'user');
       await waitForTask(h, task.id);
       const calls = h.calls().filter((c) => c.name);
-      expect(calls.some((c) => c.name === 'swipe')).toBe(false);
-      const drags = calls.filter((c) => c.name === 'drag');
-      expect(drags).toHaveLength(3);
-      for (const drag of drags) {
-        expect(drag.args).toEqual({ from_x: 205, from_y: 629, to_x: 205, to_y: 269, duration_ms: 200, cursor_mode: 'preserving' });
+      // iOS scroll views ignore Mirroir's click-drag (verified on a real iPhone).
+      expect(calls.some((c) => c.name === 'drag')).toBe(false);
+      const swipes = calls.filter((c) => c.name === 'swipe');
+      expect(swipes).toHaveLength(3);
+      for (const swipe of swipes) {
+        expect(swipe.args).toEqual({ from_x: 205, from_y: 629, to_x: 205, to_y: 269, duration_ms: 300, cursor_mode: 'preserving' });
       }
-      // One observation after the repeated flicks: no describe_screen between the last two drags.
+      // One observation after the repeated swipes: no describe_screen between the last two.
       const names = calls.map((c) => c.name);
-      const last = names.lastIndexOf('drag');
-      const previous = names.lastIndexOf('drag', last - 1);
+      const last = names.lastIndexOf('swipe');
+      const previous = names.lastIndexOf('swipe', last - 1);
       expect(names.slice(previous + 1, last)).not.toContain('describe_screen');
       expect(names.slice(last + 1)).toContain('describe_screen');
-      const audited = h.activity.query({ categories: ['ai'] }).filter((e) => e.tool === 'drag');
+      const audited = h.activity.query({ categories: ['ai'] }).filter((e) => e.tool === 'swipe');
       expect(audited).toHaveLength(3);
-      expect(audited[0]!.summary).toMatch(/^Flick from \(205, 629\) to \(205, 269\)/);
+      expect(audited[0]!.summary).toMatch(/^Swipe from \(205, 629\) to \(205, 269\)/);
     });
 
     it('marks success as NOT verified when the evidence is not on the final screen', async () => {

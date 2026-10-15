@@ -369,10 +369,9 @@ export class WorkflowExecution {
       case 'swipe': {
         const geometry = this.deps.device.geometry;
         if (!geometry) throw new StepFailure(UNKNOWN_GEOMETRY);
-        // A finger flick (Mirroir drag), like the AI's swipe: Mirroir's scroll-wheel
-        // swipe adds a ~1.4 s momentum tail and pages feeds unreliably.
-        const flick = swipeAction(step.direction, step.distance ?? 'medium', geometry.widthPt, geometry.heightPt);
-        await this.act(flick, { summary: `Swipe ${step.direction}`, geometryId: geometry.geometryId });
+        // Mirroir's swipe, like the AI's: its momentum tail is what pages feeds.
+        const swipe = swipeAction(step.direction, step.distance ?? 'medium', geometry.widthPt, geometry.heightPt);
+        await this.act(swipe, { summary: `Swipe ${step.direction}`, geometryId: geometry.geometryId });
         return { message: `Swiped ${step.direction}` };
       }
       case 'type_text': {

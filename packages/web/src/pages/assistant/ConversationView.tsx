@@ -1,14 +1,15 @@
 // Right column: one conversation — header (title, provider/model, control
-// mode), the chat with each task's progress and steps, the cloud privacy
-// notice and the composer (disabled with a reason when sending isn't possible).
+// mode), the chat in one scroll area with each AI task inline in its assistant
+// turn (status, steps, approvals, retry), the cloud privacy notice and the
+// composer (disabled with a reason when sending isn't possible).
 
 import { ArrowUpRightFromSquare, BroomMotion, ChevronDown, Comments, EllipsisVertical, Eye, Gear, Hand, Smartphone, Sparkles, TrashBin } from '@gravity-ui/icons';
-import type { ChatMessage, Conversation } from '@iphone-ai/shared';
+import type { Conversation } from '@iphone-ai/shared';
 import { Button, Dropdown, Label } from '@heroui/react';
-import { useCallback, useMemo, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useRef, useState, type ReactNode } from 'react';
 
 import { MODE_ICON, useModeChange } from '../../app/ControlModeSelector';
-import { ChatThread, CloudDisclosureNotice, Composer } from '../../components/chat';
+import { ChatThread, CloudDisclosureNotice, Composer, TaskCard, type TaskRenderContext } from '../../components/chat';
 import { ConfirmDialog } from '../../components/ConfirmDialog';
 import { StatusChip } from '../../components/StatusChip';
 import { api } from '../../lib/api';
@@ -27,7 +28,6 @@ import {
 } from '../../state/store';
 import { assistantBlockReason, EXAMPLE_PROMPT_KEYS, isUntitled, needsCloudDisclosure, reasonText, type Reason } from './assistant-utils';
 import { ProviderPicker } from './ProviderPicker';
-import { TaskBlock } from './TaskBlock';
 
 export interface ConversationViewProps {
   /** null = no conversation yet; the first instruction creates one. */
@@ -63,13 +63,9 @@ export function ConversationView({ conversation, onCreated, onChanged, onDelete 
     (disclosure ? { key: 'assistant.reason.disclosure' } : null);
   const blockText = blockReason ? reasonText(blockReason, t) : null;
 
-  const latestTaskId = useMemo(() => {
-    for (let i = messages.length - 1; i >= 0; i -= 1) {
-      const m = messages[i]!;
-      if (m.role === 'user' && m.taskId) return m.taskId;
-    }
-    return null;
-  }, [messages]);
+  const needsApproval = useAppStore((s) =>
+    conversation ? s.approvals.some((a) => a.taskId !== null && s.tasks[a.taskId]?.conversationId === conversation.id) : false,
+  );
 
   const send = useCallback(
     async (text: string) => {
@@ -93,17 +89,18 @@ export function ConversationView({ conversation, onCreated, onChanged, onDelete 
     [conversation, onChanged, onCreated, t],
   );
 
-  const renderAfterMessage = useCallback(
-    (message: ChatMessage) =>
-      message.role === 'user' && message.taskId ? (
-        <TaskBlock
-          taskId={message.taskId}
-          defaultExpanded={message.taskId === latestTaskId}
-          onRetry={canControl ? (instruction) => send(instruction) : undefined}
-          retryDisabledReason={blockText}
-        />
-      ) : null,
-    [blockText, canControl, latestTaskId, send],
+  // Only the newest task offers "Try again": older ones stay quiet.
+  const renderTask = useCallback(
+    (taskId: string, { hasReply, reply, latest }: TaskRenderContext) => (
+      <TaskCard
+        taskId={taskId}
+        showSummary={!hasReply}
+        reply={reply}
+        onRetry={canControl && latest ? send : undefined}
+        retryDisabledReason={blockText}
+      />
+    ),
+    [blockText, canControl, send],
   );
 
   const title = conversation && !isUntitled(conversation) ? conversation.title : t('assistant.untitled');
@@ -111,7 +108,7 @@ export function ConversationView({ conversation, onCreated, onChanged, onDelete 
 
   return (
     <section aria-label={t('assistant.view.label')} className="flex h-full min-h-0 flex-col">
-      <header className="flex flex-wrap items-center gap-x-3 gap-y-2 border-b border-hairline px-5 py-3">
+      <header className="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-2 border-b border-hairline px-5 py-3">
         <div className="min-w-[14rem] flex-1">
           <h1 dir="auto" className="truncate text-[17px] leading-7 font-semibold tracking-tight text-foreground">
             {conversation ? title : t('assistant.newConversation')}
@@ -164,8 +161,9 @@ export function ConversationView({ conversation, onCreated, onChanged, onDelete 
       {conversation ? (
         <ChatThread
           conversationId={conversation.id}
-          renderAfterMessage={renderAfterMessage}
-          className="px-[max(1.25rem,calc((100%-50rem)/2))]"
+          renderTask={renderTask}
+          attention={needsApproval}
+          contentClassName="px-[max(1.25rem,calc((100%-50rem)/2))]"
           empty={<Welcome onPick={(text) => void send(text).catch(() => undefined)} disabled={examplesDisabled} />}
         />
       ) : (
@@ -174,7 +172,7 @@ export function ConversationView({ conversation, onCreated, onChanged, onDelete 
         </div>
       )}
 
-      <footer className="border-t border-hairline px-[max(1.25rem,calc((100%-50rem)/2))] pt-3 pb-4">
+      <footer className="shrink-0 border-t border-hairline px-[max(1.25rem,calc((100%-50rem)/2))] pt-3 pb-4">
         <CloudDisclosureNotice className="mb-3" />
         {blockReason?.action ? <ReasonAction reason={blockReason} taskConversationId={activeTask?.conversationId ?? null} /> : null}
         <Composer onSend={send} disabledReason={blockText} placeholder={t('assistant.placeholder')} autoFocus={!blockText} />
@@ -207,7 +205,7 @@ function ObserveHint() {
   const isLocal = useIsLocal();
   const { request, dialog } = useModeChange();
   return (
-    <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 border-b border-hairline bg-surface/60 px-5 py-2 text-xs text-muted">
+    <div className="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-1.5 border-b border-hairline bg-surface/60 px-5 py-2 text-xs text-muted">
       <Eye className="size-3.5 shrink-0" />
       <span className="min-w-0 flex-1">
         <span className="font-medium text-foreground">{t('mode.observe.name')}</span>

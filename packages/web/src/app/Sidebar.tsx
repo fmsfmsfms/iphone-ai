@@ -16,6 +16,7 @@ import type { ReactNode } from 'react';
 
 import logoUrl from '../assets/logo.png';
 import { KbdHint } from '../components/KbdHint';
+import { MadeInDiriyah } from '../components/MadeInDiriyah';
 import { useI18n } from '../lib/i18n';
 import { navigate, SECTION_ORDER, type Route, type RouteName } from '../lib/router';
 import { useAppStore } from '../state/store';
@@ -128,6 +129,10 @@ export function Sidebar({ route, collapsed, onToggleCollapsed, onShowShortcuts }
           );
         })}
       </ul>
+
+      <div className="px-2.5 pb-2">
+        <MadeInDiriyah collapsed={collapsed} />
+      </div>
 
       <div className={['flex flex-col gap-1 border-t border-hairline p-2.5', collapsed ? 'items-center' : ''].join(' ')}>
         <div className={['flex items-center gap-1', collapsed ? 'flex-col' : ''].join(' ')}>

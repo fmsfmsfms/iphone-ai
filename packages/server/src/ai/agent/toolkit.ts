@@ -106,8 +106,8 @@ type ToolOutput = { content: ModelContent[]; isError: boolean };
 
 /** Screenshots per task sent to the model; later observations are text only (history is never edited). */
 export const MAX_IMAGES_PER_TASK = 30;
-/** Default pause between repeated flicks (swipe `times` > 1). */
-export const DEFAULT_FLICK_INTERVAL_MS = 700;
+/** Default pause between repeated swipes (swipe `times` > 1); each Mirroir swipe already ends with ~1.2 s of momentum. */
+export const DEFAULT_SWIPE_INTERVAL_MS = 300;
 const ALREADY_FINISHED = 'The task already finished (finish_task was called). No more tools can run; reply with one short sentence for the user.';
 
 const reason = z.string().max(300).describe('One short sentence: why this action moves the task forward.');
@@ -136,8 +136,8 @@ const SHAPES = {
       .min(1)
       .max(10)
       .optional()
-      .describe('Repeat the flick this many times (1–10, default 1), e.g. to page through several videos or screens. One observation is returned after the last flick.'),
-    interval_ms: z.number().int().min(300).max(3000).optional().describe('Pause between repeated flicks in milliseconds (300–3000, default 700).'),
+      .describe('Repeat the swipe this many times (1–10, default 1), e.g. to page through several videos or screens. One observation is returned after the last swipe.'),
+    interval_ms: z.number().int().min(300).max(3000).optional().describe('Pause between repeated swipes in milliseconds (300–3000, default 300).'),
     reason,
   },
   type_text: {
@@ -174,7 +174,7 @@ const DESCRIPTIONS: Record<ToolName, string> = {
   double_tap: 'Double-tap an element or point (e.g. to zoom or select a word).',
   long_press: 'Press and hold an element or point (context menus, Quick Actions).',
   swipe:
-    'Flick the screen: a quick finger swipe across its middle, like a real finger. "up" moves the finger up (scrolls down the page; next video in TikTok, Reels or Shorts). Use for scrolling and paging. With times > 1 it flicks repeatedly (interval_ms apart) and returns one observation after the last flick.',
+    'Swipe across the middle of the screen with flick momentum (about 1.5 s each). "up" moves the finger up (scrolls down the page; next video in TikTok, Reels or Shorts). Use for scrolling and paging. With times > 1 it swipes repeatedly (interval_ms apart) and returns one observation after the last swipe.',
   type_text:
     'Type text into the currently focused text field (tap the field first). Never use for passwords, passcodes or codes. Do not include line breaks; use press_key "return" to submit.',
   press_key: 'Press a key: return (submit/search), delete (backspace), escape, tab, space or arrows.',
@@ -490,9 +490,9 @@ export class AgentToolkit {
     let action: DeviceAction;
     let ref: TargetRef = { kind: 'none' };
     let targetDescription = '';
-    /** Repeated flicks (swipe `times`): each is policy-checked; one observation follows the last. */
+    /** Repeated swipes (swipe `times`): each is policy-checked; one observation follows the last. */
     let repeat = 1;
-    let intervalMs = DEFAULT_FLICK_INTERVAL_MS;
+    let intervalMs = DEFAULT_SWIPE_INTERVAL_MS;
     const pointer = name === 'tap' || name === 'double_tap' || name === 'long_press';
     if (pointer) {
       const resolved = this.resolveTarget(args, observation);
@@ -507,9 +507,9 @@ export class AgentToolkit {
             : { kind: 'long_press', x: resolved.x, y: resolved.y, ...(args.duration_ms ? { durationMs: Number(args.duration_ms) } : {}) };
     } else if (name === 'swipe') {
       if (!geometry) return errorResult('The screen size is unknown; call observe_screen first.');
-      action = swipeAction(args.direction as SwipeDirection, (args.distance as FlickDistance | undefined) ?? 'medium', geometry.widthPt, geometry.heightPt);
+      action = swipeAction(args.direction as SwipeDirection, (args.distance as SwipeDistance | undefined) ?? 'medium', geometry.widthPt, geometry.heightPt);
       repeat = typeof args.times === 'number' ? Math.min(10, Math.max(1, Math.round(args.times))) : 1;
-      intervalMs = typeof args.interval_ms === 'number' ? Math.min(3000, Math.max(300, Math.round(args.interval_ms))) : DEFAULT_FLICK_INTERVAL_MS;
+      intervalMs = typeof args.interval_ms === 'number' ? Math.min(3000, Math.max(300, Math.round(args.interval_ms))) : DEFAULT_SWIPE_INTERVAL_MS;
       targetDescription = `${String(args.direction)} (${String(args.distance ?? 'medium')})${repeat > 1 ? ` ×${repeat}` : ''}`;
     } else if (name === 'type_text') {
       action = { kind: 'type_text', text: String(args.text) };
@@ -612,7 +612,7 @@ export class AgentToolkit {
       current = recheck.observation;
     }
 
-    // Execute (a repeated flick runs `repeat` times, then one observation).
+    // Execute (a repeated swipe runs `repeat` times, then one observation).
     this.task.setActivity(repeat > 1 ? `${summary} (1/${repeat})` : summary);
     const fingerprintBefore = current.description.fingerprint;
     const geometryNow = current.description.geometry ?? this.deps.device.geometry;
@@ -650,7 +650,7 @@ export class AgentToolkit {
         this.task.addStep({
           type: 'tool_call',
           title: summary,
-          detail: performed > 0 ? `Stopped after ${performed} of ${repeat} flicks: ${message}` : message,
+          detail: performed > 0 ? `Stopped after ${performed} of ${repeat} swipes: ${message}` : message,
           tool: { name: action.kind, args: displayArgs, ok: false, result: message, durationMs: Date.now() - started },
           screenshotId: null,
         });
@@ -660,7 +660,7 @@ export class AgentToolkit {
           if (performed > 0) this.attempts.set(signature, previous + 1);
           return errorResult(
             performed > 0
-              ? `The task was paused after ${performed} of ${repeat} flicks; the remaining flicks were NOT executed. When the task resumes, call observe_screen and decide again.`
+              ? `The task was paused after ${performed} of ${repeat} swipes; the remaining swipes were NOT executed. When the task resumes, call observe_screen and decide again.`
               : 'The task was paused before this action ran; it was NOT executed. When the task resumes, call observe_screen and decide again.',
           );
         }
@@ -671,7 +671,7 @@ export class AgentToolkit {
           }
           return errorResult(`${message}`);
         }
-        // Some flicks already ran: report them with a fresh observation below.
+        // Some swipes already ran: report them with a fresh observation below.
         stoppedEarly = message;
         break;
       }
@@ -703,17 +703,17 @@ export class AgentToolkit {
     const changed = after ? after.observation.description.fingerprint !== fingerprintBefore : null;
     this.unchangedStreak = changed === false ? this.unchangedStreak + 1 : 0;
 
-    const flicks =
+    const swipes =
       repeat > 1
         ? performed < repeat
-          ? `Performed ${performed} of ${repeat} flicks (stopped: ${stoppedEarly ?? 'Mirroir reported a failure'}).`
-          : `Performed ${repeat} flicks, ${intervalMs} ms apart.`
+          ? `Performed ${performed} of ${repeat} swipes (stopped: ${stoppedEarly ?? 'Mirroir reported a failure'}).`
+          : `Performed ${repeat} swipes, ${intervalMs} ms apart.`
         : null;
     this.task.addStep({
       type: 'tool_call',
       title: summary,
       detail: [
-        flicks,
+        swipes,
         changed === null ? `Could not re-check the screen: ${observeError}` : changed ? 'The screen changed.' : 'The screen did not change.',
       ]
         .filter(Boolean)
@@ -731,7 +731,7 @@ export class AgentToolkit {
     const header = [
       `Action: ${describeAction(action, true)}${repeat > 1 ? ` ×${repeat}` : ''}`,
       `Mirroir: ${result.ok ? 'OK' : 'FAILED'} — ${truncate(result.message, 300)}`,
-      flicks,
+      swipes,
       changed === null
         ? `Could not observe the screen afterwards: ${observeError}`
         : changed
@@ -749,7 +749,7 @@ export class AgentToolkit {
   }
 
   /**
-   * Gate before each repeated flick after the first: waits the interval, then
+   * Gate before each repeated swipe after the first: waits the interval, then
    * re-checks the budget and the live policy (mode, allowed tools, rules). The
    * approval given for the batch covers the repetitions only while the policy
    * asks for nothing new.
@@ -769,12 +769,12 @@ export class AgentToolkit {
     }
     const decision = this.decide(action, this.policyTarget(action, ref, observation), observation);
     if (decision.verdict === 'deny') {
-      this.task.addStep({ type: 'policy', title: 'Repeated flick blocked', detail: decision.reasons.join('\n'), tool: null, screenshotId: null });
+      this.task.addStep({ type: 'policy', title: 'Repeated swipe blocked', detail: decision.reasons.join('\n'), tool: null, screenshotId: null });
       return { stop: `blocked by iPhone AI's safety policy (${decision.reasons.join(' ')})` };
     }
     if (decision.verdict === 'require_approval') {
       const added = decision.rules.filter((rule) => !approved.rules.includes(rule));
-      if (!approvalId || added.length > 0) return { stop: 'the next flick needs a new approval' };
+      if (!approvalId || added.length > 0) return { stop: 'the next swipe needs a new approval' };
     }
     return { decision };
   }
@@ -1075,31 +1075,31 @@ function focusedFieldGuess(elements: readonly ScreenElement[]): string | null {
   return field?.label ?? null;
 }
 
-export type FlickDistance = 'short' | 'medium' | 'long';
+export type SwipeDistance = 'short' | 'medium' | 'long';
 
 /**
- * Finger flicks for the AI swipe tool. Mirroir's `swipe` is a synthesized
- * trackpad scroll with a momentum tail (~2.3 s per call); its `drag` is a real
- * touch drag with no initial hold, which iOS treats as a finger flick when it
- * is this fast. Travel is a fraction of the screen dimension along the swipe.
+ * Swipes for the AI swipe tool and workflow swipe steps: Mirroir's `swipe`, a
+ * synthesized trackpad scroll whose momentum tail (~1.2 s) is what makes iOS
+ * page feeds and carousels. Mirroir's `drag` is NOT a substitute: iPhone
+ * Mirroring delivers it as a pointer click-drag, which scroll views such as
+ * TikTok's feed ignore (verified on a real iPhone, v0.3.0). 300 ms is
+ * Mirroir's calibrated default and fast enough to get flick momentum. Travel is
+ * a fraction of the screen dimension along the swipe.
  */
-export const FLICK: Readonly<Record<FlickDistance, { travel: number; durationMs: number }>> = {
-  short: { travel: 0.25, durationMs: 160 },
-  medium: { travel: 0.4, durationMs: 200 },
-  long: { travel: 0.55, durationMs: 240 },
-};
-/** Flicks stay this far from the top and bottom edges (status bar, Home indicator, Control/Notification Center). */
-export const FLICK_MARGIN_Y = 60;
-/** …and this far from the side edges (the edge-swipe Back gesture). */
-export const FLICK_MARGIN_X = 24;
+export const SWIPE_DURATION_MS = 300;
+export const SWIPE_TRAVEL: Readonly<Record<SwipeDistance, number>> = { short: 0.25, medium: 0.4, long: 0.55 };
+/** Swipe end points stay this far from the top and bottom edges (status bar, Home indicator). */
+export const SWIPE_MARGIN_Y = 60;
+/** …and this far from the side edges. */
+export const SWIPE_MARGIN_X = 24;
 
 export function swipeAction(
   direction: SwipeDirection,
-  distance: FlickDistance,
+  distance: SwipeDistance,
   width: number,
   height: number,
-): Extract<DeviceAction, { kind: 'drag' }> {
-  const { travel, durationMs } = FLICK[distance];
+): Extract<DeviceAction, { kind: 'swipe' }> {
+  const travel = SWIPE_TRAVEL[distance];
   const clamp = (value: number, size: number, margin: number) => {
     const low = Math.min(margin, size / 2);
     const high = Math.max(size - margin, size / 2);
@@ -1109,26 +1109,25 @@ export function swipeAction(
   const cy = height / 2;
   const halfY = (height * travel) / 2;
   const halfX = (width * travel) / 2;
-  const x = (value: number) => clamp(value, width, FLICK_MARGIN_X);
-  const y = (value: number) => clamp(value, height, FLICK_MARGIN_Y);
-  const flick = (fromX: number, fromY: number, toX: number, toY: number): Extract<DeviceAction, { kind: 'drag' }> => ({
-    kind: 'drag',
+  const x = (value: number) => clamp(value, width, SWIPE_MARGIN_X);
+  const y = (value: number) => clamp(value, height, SWIPE_MARGIN_Y);
+  const swipe = (fromX: number, fromY: number, toX: number, toY: number): Extract<DeviceAction, { kind: 'swipe' }> => ({
+    kind: 'swipe',
     fromX: x(fromX),
     fromY: y(fromY),
     toX: x(toX),
     toY: y(toY),
-    durationMs,
-    asSwipe: true,
+    durationMs: SWIPE_DURATION_MS,
   });
   switch (direction) {
     case 'up':
-      return flick(cx, cy + halfY, cx, cy - halfY);
+      return swipe(cx, cy + halfY, cx, cy - halfY);
     case 'down':
-      return flick(cx, cy - halfY, cx, cy + halfY);
+      return swipe(cx, cy - halfY, cx, cy + halfY);
     case 'left':
-      return flick(cx + halfX, cy, cx - halfX, cy);
+      return swipe(cx + halfX, cy, cx - halfX, cy);
     case 'right':
-      return flick(cx - halfX, cy, cx + halfX, cy);
+      return swipe(cx - halfX, cy, cx + halfX, cy);
   }
 }
 
@@ -1141,7 +1140,7 @@ function actionSignature(action: DeviceAction): string {
       return `${action.kind}:${round(action.x)},${round(action.y)}`;
     case 'swipe':
     case 'drag':
-      return `${action.kind === 'drag' && action.asSwipe ? 'flick' : action.kind}:${round(action.fromX)},${round(action.fromY)}>${round(action.toX)},${round(action.toY)}`;
+      return `${action.kind}:${round(action.fromX)},${round(action.fromY)}>${round(action.toX)},${round(action.toY)}`;
     case 'type_text':
       return `type:${action.text}`;
     case 'press_key':

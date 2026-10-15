@@ -3,35 +3,15 @@
 import { describe, expect, it } from 'vitest';
 
 import './messages';
+import { FAILURE_KINDS } from '../../components/chat/task-ui';
 import { getCatalog } from '../../lib/i18n';
-import { EXAMPLE_PROMPT_KEYS, type FailureKind } from './assistant-utils';
+import { EXAMPLE_PROMPT_KEYS } from './assistant-utils';
 
 const sources = import.meta.glob(['./*.ts', './*.tsx', '!./*.test.ts', '!./*.test.tsx', '!./messages.ts'], {
   query: '?raw',
   import: 'default',
   eager: true,
 }) as Record<string, string>;
-
-const FAILURE_KINDS: readonly FailureKind[] = [
-  'cancelled',
-  'emergencyStop',
-  'stopped',
-  'timeout',
-  'stepLimit',
-  'loop',
-  'auth',
-  'config',
-  'rateLimit',
-  'network',
-  'refusal',
-  'needsUser',
-  'mirroring',
-  'permission',
-  'mcp',
-  'policy',
-  'unsuccessful',
-  'generic',
-];
 
 function exists(language: 'en' | 'ar', key: string): boolean {
   const catalog = getCatalog(language);
@@ -44,9 +24,10 @@ function usedKeys(): Set<string> {
     for (const match of source.matchAll(/'(assistant\.[A-Za-z0-9_.-]+)'/g)) keys.add(match[1]!);
     for (const match of source.matchAll(/\bt\(\s*'([^']+)'/g)) keys.add(match[1]!);
   }
+  // Failure explanations shown in the conversation (shared with Live Control).
   for (const kind of FAILURE_KINDS) {
-    keys.add(`assistant.failure.${kind}.title`);
-    keys.add(`assistant.failure.${kind}.body`);
+    keys.add(`task.failure.${kind}.title`);
+    keys.add(`task.failure.${kind}.body`);
   }
   for (const group of ['today', 'yesterday', 'week', 'older']) keys.add(`assistant.list.group.${group}`);
   for (const mode of ['observe', 'assisted', 'supervised']) {
@@ -58,7 +39,7 @@ function usedKeys(): Set<string> {
 
 describe('assistant messages', () => {
   it('define every key used by the page in English and Arabic', () => {
-    expect(Object.keys(sources).length).toBeGreaterThan(5);
+    expect(Object.keys(sources).length).toBeGreaterThan(4);
     const keys = [...usedKeys()];
     expect(keys.length).toBeGreaterThan(80);
     expect(keys.filter((k) => !exists('en', k))).toEqual([]);

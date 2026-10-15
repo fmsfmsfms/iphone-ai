@@ -170,8 +170,8 @@ describe('honest status line', () => {
   });
 });
 
-describe('finger-like gestures', () => {
-  it('a drag sends Mirroir "drag" with the real start/end points and duration', async () => {
+describe('drag gestures', () => {
+  it('a drag sends a Mirroir swipe with the real start/end points and duration', async () => {
     const { bodies } = actionRoute();
     render(<PhoneViewer interactive toolbar />);
     await deliver(42);
@@ -185,13 +185,13 @@ describe('finger-like gestures', () => {
 
     await waitFor(() => expect(bodies).toHaveLength(1));
     expect(bodies[0]).toEqual({
-      action: { kind: 'drag', fromX: 205, fromY: 600, toX: 205, toY: 300, durationMs: 250 },
+      action: { kind: 'swipe', fromX: 205, fromY: 600, toX: 205, toY: 300, durationMs: 250 },
       geometryId: '410x890',
       frameSeq: 42,
     });
   });
 
-  it('clamps quick flicks to 60 ms and slow drags to 1500 ms; never sends a trackpad swipe', async () => {
+  it('clamps quick flicks to 60 ms and slow drags to 1500 ms', async () => {
     const { bodies } = actionRoute();
     render(<PhoneViewer interactive toolbar />);
     await deliver(1);
@@ -209,8 +209,8 @@ describe('finger-like gestures', () => {
     await waitFor(() => expect(bodies).toHaveLength(2));
 
     expect(bodies.map((b) => (b as { action: unknown }).action)).toEqual([
-      { kind: 'drag', fromX: 100, fromY: 700, toX: 110, toY: 200, durationMs: 60 },
-      { kind: 'drag', fromX: 300, fromY: 200, toX: 300, toY: 890, durationMs: 1500 },
+      { kind: 'swipe', fromX: 100, fromY: 700, toX: 110, toY: 200, durationMs: 60 },
+      { kind: 'swipe', fromX: 300, fromY: 200, toX: 300, toY: 890, durationMs: 1500 },
     ]);
   });
 
@@ -255,7 +255,7 @@ describe('finger-like gestures', () => {
 });
 
 describe('keyboard flicks', () => {
-  it('arrow keys flick the focused screen: 40% of the screen, centred, in 200 ms', async () => {
+  it('arrow keys swipe the focused screen: 40% of the screen, centred, in 300 ms', async () => {
     const { bodies } = actionRoute();
     render(<PhoneViewer interactive toolbar />);
     await deliver(7);
@@ -277,9 +277,9 @@ describe('keyboard flicks', () => {
     await waitFor(() => expect(bodies).toHaveLength(3));
 
     expect(bodies).toEqual([
-      { action: { kind: 'drag', fromX: 205, fromY: 623, toX: 205, toY: 267, durationMs: 200 }, geometryId: '410x890', frameSeq: 7 },
-      { action: { kind: 'drag', fromX: 287, fromY: 445, toX: 123, toY: 445, durationMs: 200 }, geometryId: '410x890', frameSeq: 7 },
-      { action: { kind: 'drag', fromX: 205, fromY: 267, toX: 205, toY: 623, durationMs: 200 }, geometryId: '410x890', frameSeq: 7 },
+      { action: { kind: 'swipe', fromX: 205, fromY: 623, toX: 205, toY: 267, durationMs: 300 }, geometryId: '410x890', frameSeq: 7 },
+      { action: { kind: 'swipe', fromX: 287, fromY: 445, toX: 123, toY: 445, durationMs: 300 }, geometryId: '410x890', frameSeq: 7 },
+      { action: { kind: 'swipe', fromX: 205, fromY: 267, toX: 205, toY: 623, durationMs: 300 }, geometryId: '410x890', frameSeq: 7 },
     ]);
   });
 

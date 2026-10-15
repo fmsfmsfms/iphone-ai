@@ -317,3 +317,9 @@ body {
     animation: none;
   }
 }
+
+/* Saudi emblem (MadeInDiriyah): one artwork per canvas, picked by the theme class. */
+html.light .saudi-mark--dark,
+html:not(.light) .saudi-mark--light {
+  display: none;
+}

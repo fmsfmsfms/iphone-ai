@@ -24,6 +24,7 @@ import { EmptyState } from '../EmptyState';
 import { RelativeTime } from '../RelativeTime';
 import { StatusChip } from '../StatusChip';
 import { formatArgs, formatDuration, STEP_TYPE_KEY } from './task-ui';
+import { useHoldScrollPosition } from './thread-scroll';
 
 const STEP_ICON: Record<AgentStepType, ReactNode> = {
   observe: <Eye />,
@@ -122,6 +123,7 @@ function StepRow({ step, compact, isLast, onPreview }: { step: AgentStep; compac
   const tool = step.tool;
   const args = formatArgs(tool?.args);
   const isReasoning = step.type === 'reasoning';
+  const holdScrollPosition = useHoldScrollPosition();
 
   return (
     <li className="relative flex gap-3 pb-3">
@@ -150,7 +152,10 @@ function StepRow({ step, compact, isLast, onPreview }: { step: AgentStep; compac
 
         {step.detail && isReasoning ? (
           <details className="group mt-1">
-            <summary className="flex cursor-pointer list-none items-center gap-1 text-xs text-muted select-none hover:text-foreground">
+            <summary
+              onClick={(e) => holdScrollPosition(e.currentTarget)}
+              className="flex cursor-pointer list-none items-center gap-1 text-xs text-muted select-none hover:text-foreground"
+            >
               <ChevronDown className="size-3 transition-transform group-open:rotate-180" />
               {t('steps.showReasoning')}
             </summary>

@@ -6,13 +6,27 @@ import { useI18n } from '../../lib/i18n';
 import { useActiveTask, useAppStore } from '../../state/store';
 
 export { ApprovalCard, formatCountdown, type ApprovalCardProps } from './ApprovalCard';
-export { ChatThread, type ChatThreadProps } from './ChatThread';
+export { ChatThread, type ChatThreadProps, type TaskRenderContext } from './ChatThread';
 export { CloudDisclosureNotice, type CloudDisclosureNoticeProps } from './CloudDisclosureNotice';
 export { Composer, type ComposerProps } from './Composer';
 export { MessageBubble, type MessageBubbleProps } from './MessageBubble';
 export { StepTimeline, type StepTimelineProps } from './StepTimeline';
+export { TaskCard, TaskStatusBar, type TaskCardProps, type TaskStatusBarProps } from './TaskCard';
 export { TaskProgress, type TaskProgressProps } from './TaskProgress';
-export { formatArgs, formatDuration, RISK_KEY, RISK_TONE, STEP_TYPE_KEY, TASK_STATUS_KEY, TASK_STATUS_TONE } from './task-ui';
+export {
+  explainTaskFailure,
+  formatArgs,
+  formatDuration,
+  formatElapsed,
+  RISK_KEY,
+  RISK_TONE,
+  STEP_TYPE_KEY,
+  TASK_STATUS_KEY,
+  TASK_STATUS_TONE,
+  type FailureAction,
+  type FailureExplanation,
+  type FailureKind,
+} from './task-ui';
 
 /**
  * Translated reason why a new instruction cannot be sent right now (offline,

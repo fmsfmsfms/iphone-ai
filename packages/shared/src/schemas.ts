@@ -28,7 +28,6 @@ export const deviceActionSchema = z.discriminatedUnion('kind', [
     toX: point,
     toY: point,
     durationMs: duration.optional(),
-    asSwipe: z.literal(true).optional(),
   }),
   z.object({ kind: z.literal('type_text'), text: z.string().min(1).max(2000) }),
   z.object({

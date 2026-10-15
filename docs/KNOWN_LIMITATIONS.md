@@ -7,6 +7,11 @@
   15 at most). It needs iPhone AI's Screen Recording grant. Without it, or if the helper
   fails, the viewer falls back to polling Mirroir's `screenshot` tool (≈2 fps, PNG over
   MCP). The viewer shows which source is live and the measured FPS/latency.
+- **A swipe takes about 1.5 s.** Paging feeds (TikTok, Reels, Shorts) needs Mirroir's
+  `swipe`, a trackpad-style scroll whose ~1.2 s momentum tail is what makes iOS snap to the
+  next item; the call returns after the tail. Mirroir's `drag` is faster but arrives as a
+  pointer click-drag, which iOS scroll views ignore (verified on the real iPhone). The AI
+  can page several items in one step (`times`) to save observations.
 - **Every input action costs ~0.6 s of window activation.** Mirroir brings iPhone
   Mirroring to the front and waits for macOS to settle before each tap or gesture. This
   is inside Mirroir and is not changed by iPhone AI.

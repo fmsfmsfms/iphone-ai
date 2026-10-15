@@ -10,13 +10,13 @@ Three kinds of evidence are kept strictly apart:
 
 ## Automated suites
 
-Last full run: 2026-10-15, v0.3.0, with the official Node 22 toolchain (`source scripts/env.sh`).
+Last full run: 2026-10-15, v0.4.0, with the official Node 22 toolchain (`source scripts/env.sh`).
 
 | Suite | Command | Result |
 |---|---|---|
 | Backend unit + integration (MOCK) | `pnpm --filter @iphone-ai/server test` | 496 passed (38 files, incl. the real capture helper's --test-pattern against the backend parser) |
-| UI unit (jsdom) | `pnpm --filter @iphone-ai/web test` | 304 passed (33 files) |
-| Browser E2E (Playwright, MOCK backend + scripted model) | `pnpm test:e2e` | 19 passed |
+| UI unit (jsdom) | `pnpm --filter @iphone-ai/web test` | 322 passed (33 files) |
+| Browser E2E (Playwright, MOCK backend + scripted model) | `pnpm test:e2e` | 24 passed (incl. the Live Control assistant panel: one scroller, approvals in view) |
 | Tauri shell (Rust) | `cd src-tauri && cargo test` | 21 passed; clippy and rustfmt clean |
 | Real-device read-only | `pnpm test:device` (needs a connected iPhone) | not run; see device section |
 
@@ -73,10 +73,22 @@ activity log and macOS's unified log:**
 - Two genuine pauses came from the iPhone being unlocked during the session; the app's old
   "Unlock your iPhone" advice was wrong and is corrected in v0.3.0.
 
+**v0.3.0 on the real iPhone (installed app, 2026-10-15), read from the backend, activity
+and unified logs:**
+
+- Mirroir stayed **Connected** with the live view on (snapshot capture): no paused flips and
+  no "window streaming" events in iPhone Mirroring's log. The helper ran as a background-only
+  process (one Dock icon). Live view measured 9.8–10 fps during video, 3 ms encode,
+  13–35 ms latency.
+- First live Claude run (Anthropic API, `claude-opus-5-5`, Supervised): "open tiktok and scroll
+  for 20 videos". TikTok opened (4.0 s) and a tap worked (64 ms), but **13 swipes did not move
+  the feed**: v0.2.0/0.3.0 sent swipes as Mirroir `drag` (~250 ms each), which iOS treats as a
+  pointer click-drag. The task failed honestly ("the For You feed wouldn't move"). Fixed in
+  v0.4.0 by going back to Mirroir `swipe` (the gesture that paged TikTok in v0.1.0).
+
 **Not yet verified on the real iPhone:**
 
-- Finger-flick swipes (Mirroir `drag`, 160–240 ms) for the AI, workflows and the viewer,
-  and the shorter after-action settle (450 ms). Mock Mirroir only; no AI or manual swipe ran
-  after v0.2.0 was installed.
-- Everything new in v0.3.0: screenshot-based live capture, the background-only helper, the
-  conflict safety net, the corrected pause guidance and the launch hand-off.
+- v0.4.0's swipes (Mirroir `swipe`, 300 ms, repeated with `times`) for the AI, workflows and the
+  viewer, and the viewer's speed-matched drags.
+- The launch hand-off from a copy in `~/Documents`, and the conflict safety net (it has not
+  been triggered on this Mac).

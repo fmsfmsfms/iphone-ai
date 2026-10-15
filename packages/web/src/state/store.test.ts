@@ -120,6 +120,13 @@ describe('reduceServerEvent', () => {
     expect(s.tasks['task_1']?.status).toBe('completed');
   });
 
+  it('never turns a finished task back into a running one (a late action response)', () => {
+    let s = apply(createInitialState(), { type: 'task_update', task: makeTask({ status: 'cancelled' }) });
+    s = apply(s, { type: 'task_update', task: makeTask({ status: 'paused' }) });
+    expect(s.tasks['task_1']?.status).toBe('cancelled');
+    expect(s.activeTaskId).toBeNull();
+  });
+
   it('task_step upserts steps ordered by index', () => {
     const s = apply(
       createInitialState(),

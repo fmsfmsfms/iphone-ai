@@ -52,6 +52,14 @@ async function sendInstruction(page: Page, text: string): Promise<void> {
   await page.getByRole('button', { name: 'Send', exact: true }).click();
 }
 
+/** The task reads "Stopped" and the reply says why, once — no note repeating it. */
+async function expectStoppedTask(page: Page): Promise<void> {
+  const task = page.getByRole('region', { name: 'AI task' }).last();
+  await expect(task.getByText('Stopped', { exact: true })).toBeVisible({ timeout: 15_000 });
+  await expect(page.getByText(/Stopped by the emergency stop/)).toHaveCount(1);
+  await expect(page.getByRole('note')).toHaveCount(0);
+}
+
 test.afterEach(async ({ page }) => {
   // Never leave the stop latched for the next test, whatever happened here.
   if ((await getStatus(page)).stopLatched) await api(page, 'POST', '/api/control/rearm', {});
@@ -149,7 +157,7 @@ test('STOP cancels a pending approval and the AI task; nothing reaches the phone
   await statusBar(page).getByRole('button', { name: 'STOP AI CONTROL' }).click();
   await expect(statusBar(page).getByRole('button', { name: 'Stopped — Re-arm control' })).toBeVisible();
   await expect(card).toBeHidden();
-  await expect(page.getByRole('note').filter({ hasText: 'Stopped by the emergency stop' })).toBeVisible({ timeout: 15_000 });
+  await expectStoppedTask(page);
 
   const boot = await getBootstrap(page);
   expect(boot.activeTask).toBeNull();
@@ -182,7 +190,7 @@ test('STOP during an executing input terminates Mirroir with SIGTERM and restart
   // Mirroir got SIGTERM (it releases held input on that signal) and was started again.
   await expect.poll(() => readMockLog().slice(logMark).some((e) => e.signal === 'SIGTERM'), { timeout: 10_000 }).toBe(true);
   await expect.poll(() => mockStarts(), { timeout: 15_000 }).toBeGreaterThan(starts);
-  await expect(page.getByRole('note').filter({ hasText: 'Stopped by the emergency stop' })).toBeVisible({ timeout: 15_000 });
+  await expectStoppedTask(page);
 
   writeMockState({ slowMs: {} });
   await api(page, 'POST', '/api/control/rearm', {});

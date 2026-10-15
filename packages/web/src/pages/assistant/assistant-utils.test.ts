@@ -1,13 +1,12 @@
 import type { Conversation } from '@iphone-ai/shared';
 import { describe, expect, it } from 'vitest';
 
-import { makeApproval, makeSettings, makeStatus, makeStep, makeTask } from '../../test/fixtures';
+import { makeSettings, makeStatus, makeTask } from '../../test/fixtures';
 import {
   assistantBlockReason,
   explainTaskFailure,
   filterConversations,
   groupConversations,
-  interleaveApprovals,
   isUntitled,
   needsCloudDisclosure,
   nextConversationAfterRemoval,
@@ -52,25 +51,6 @@ describe('conversations', () => {
     expect(nextConversationAfterRemoval(list, 'b')?.id).toBe('c');
     expect(nextConversationAfterRemoval(list, 'c')?.id).toBe('b');
     expect(nextConversationAfterRemoval([conv('a', 1)], 'a')).toBeNull();
-  });
-});
-
-describe('interleaveApprovals', () => {
-  it('places pending approvals where they were requested', () => {
-    const steps = [
-      makeStep({ id: 's1', index: 0, createdAt: 100 }),
-      makeStep({ id: 's2', index: 1, createdAt: 200 }),
-      makeStep({ id: 's3', index: 2, createdAt: 400 }),
-    ];
-    const approval = makeApproval({ id: 'ap', createdAt: 300 });
-    const items = interleaveApprovals(steps, [approval]);
-    expect(items.map((i) => (i.kind === 'steps' ? i.steps.map((s) => s.id).join(',') : i.approval.id))).toEqual(['s1,s2', 'ap', 's3']);
-  });
-
-  it('puts approvals newer than every step at the end', () => {
-    const items = interleaveApprovals([makeStep({ id: 's1', createdAt: 100 })], [makeApproval({ id: 'late', createdAt: 900 })]);
-    expect(items.map((i) => i.kind)).toEqual(['steps', 'approval']);
-    expect(interleaveApprovals([], [])).toEqual([]);
   });
 });
 

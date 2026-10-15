@@ -1,13 +1,15 @@
 // Live Control's assistant panel must gate sending behind the cloud privacy
-// notice exactly like the AI Assistant page (it used to send straight away).
+// notice exactly like the AI Assistant page (it used to send straight away),
+// and show the conversation as one clean thread: one scroll area, each task
+// inline in its turn, the final summary once, every pending approval visible.
 
 import { act, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import './messages';
-import { appStore, reduceBootstrap, resetStoreForTests, setConnection } from '../../state/store';
-import { makeBootstrap, makeSettings } from '../../test/fixtures';
+import { appStore, dispatchServerEvent, reduceBootstrap, resetStoreForTests, setConnection } from '../../state/store';
+import { makeApproval, makeBootstrap, makeMessage, makeSettings, makeTask } from '../../test/fixtures';
 import { calledRoutes, jsonResponse, routeFetch } from '../../test/http';
 import { AssistantPanel } from './AssistantPanel';
 
@@ -71,5 +73,68 @@ describe('Live Control assistant panel', () => {
     expect(box).toBeDisabled();
     expect(screen.getByText(/can only be accepted on the Mac/)).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'I understand' })).not.toBeInTheDocument();
+  });
+});
+
+describe('Live Control assistant panel conversation', () => {
+  const SUMMARY = 'The For You feed wouldn’t move to the next post. I swiped up several times, but the screen stayed on the same video.';
+  const failed = makeTask({
+    id: 'task_9',
+    status: 'failed',
+    instruction: 'open tiktok and scroll for 20 videos',
+    endedAt: 9_000,
+    actionsUsed: 14,
+    currentActivity: null,
+    outcome: { success: false, verified: false, summary: SUMMARY },
+    error: SUMMARY,
+  });
+
+  function setupConversation() {
+    routeFetch({
+      '/api/conversations': () => jsonResponse(200, [conversation]),
+      '/api/conversations/conv_1/messages': () =>
+        jsonResponse(200, [
+          makeMessage({ id: 'u9', text: 'open tiktok and scroll for 20 videos', taskId: 'task_9', createdAt: 5 }),
+          makeMessage({ id: 'a9', role: 'assistant', text: `Opening TikTok.\n\n${SUMMARY}`, taskId: 'task_9', createdAt: 6 }),
+        ]),
+      '/api/conversations/conv_1/tasks': () => jsonResponse(200, [failed]),
+    });
+    act(() => {
+      appStore.setState((s) => reduceBootstrap(s, makeBootstrap({ settings: withCloudProvider(true) })));
+      setConnection({ socket: 'open' });
+    });
+    return render(<AssistantPanel />);
+  }
+
+  it('is one scroll area with the task inline and the summary shown once', async () => {
+    const { container } = setupConversation();
+    const log = await screen.findByRole('log', { name: 'Conversation' });
+    await waitFor(() => expect(log).toHaveTextContent('open tiktok and scroll for 20 videos'));
+    expect(container.querySelectorAll('.app-scroll')).toHaveLength(1);
+    expect(log).toContainElement(screen.getByRole('region', { name: 'AI task' }));
+    expect((document.body.textContent ?? '').split(SUMMARY).length - 1).toBe(1);
+    expect(screen.getByText('Failed', { exact: true })).toBeInTheDocument();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Show steps' })).toHaveAttribute('aria-expanded', 'false');
+    expect(screen.getByRole('textbox', { name: 'Instruction for the AI' })).not.toBeDisabled();
+  });
+
+  it('lists every pending approval: a task’s inline, an automation’s after the conversation', async () => {
+    setupConversation();
+    const log = await screen.findByRole('log', { name: 'Conversation' });
+    await waitFor(() => expect(log).toHaveTextContent('open tiktok and scroll for 20 videos'));
+    act(() => {
+      dispatchServerEvent({ type: 'approval_requested', approval: makeApproval({ id: 'ap_task', taskId: 'task_9', summary: 'Open TikTok' }) });
+      dispatchServerEvent({
+        type: 'approval_requested',
+        approval: makeApproval({ id: 'ap_wf', taskId: null, workflowRunId: 'run_1', actor: 'workflow', summary: 'Tap “Send” in Messages' }),
+      });
+    });
+    const cards = screen.getAllByRole('article', { name: 'Approval request' });
+    expect(cards).toHaveLength(2);
+    for (const card of cards) expect(log).toContainElement(card);
+    expect(cards[0]).toHaveTextContent('Open TikTok');
+    expect(cards[1]).toHaveTextContent('Tap “Send” in Messages');
+    expect(screen.getByRole('heading', { name: 'Needs your approval' })).toBeInTheDocument();
   });
 });

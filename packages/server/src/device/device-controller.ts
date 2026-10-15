@@ -1002,7 +1002,7 @@ export function describeAction(action: DeviceAction, showTypedText = false): str
     case 'swipe':
       return `Swipe from (${Math.round(action.fromX)}, ${Math.round(action.fromY)}) to (${Math.round(action.toX)}, ${Math.round(action.toY)})`;
     case 'drag':
-      return `${action.asSwipe ? 'Flick' : 'Drag'} from (${Math.round(action.fromX)}, ${Math.round(action.fromY)}) to (${Math.round(action.toX)}, ${Math.round(action.toY)})`;
+      return `Drag from (${Math.round(action.fromX)}, ${Math.round(action.fromY)}) to (${Math.round(action.toX)}, ${Math.round(action.toY)})`;
     case 'type_text':
       return showTypedText ? `Type "${action.text.slice(0, 80)}"` : `Type ${[...action.text].length} characters`;
     case 'press_key':

@@ -1,8 +1,8 @@
 // Pointer and keyboard layer over the phone picture that turns input into
 // device actions: a click is a tap (or long-press / double-tap, per the mode);
-// every drag — a quick flick or a slow drag — is a real touch drag with the
-// user's own start/end points and duration (lib/gestures.ts). While the screen
-// is focused, the arrow keys send centred finger flicks (↑ = next item).
+// a drag is a Mirroir swipe with the user's own start/end points and duration
+// (a click-drag in Long press mode; lib/gestures.ts). While the screen is
+// focused, the arrow keys send centred swipes (↑ = next item).
 
 import type { DeviceAction, FrameMeta } from '@iphone-ai/shared';
 import {
@@ -170,7 +170,7 @@ export function TouchSurface({ imageRef, meta, natural, mode, keyboardFlicks = f
       elapsedMs: performance.now() - g.startTime,
     });
     if (!action) return;
-    if (action.kind === 'drag') addRipple(toLocal(e.clientX, e.clientY), false);
+    if (action.kind === 'swipe' || action.kind === 'drag') addRipple(toLocal(e.clientX, e.clientY), false);
     else addRipple(toLocal(g.startClient.x, g.startClient.y), action.kind === 'long_press');
     void send(action);
   };
@@ -183,7 +183,7 @@ export function TouchSurface({ imageRef, meta, natural, mode, keyboardFlicks = f
     e.preventDefault();
     if (e.repeat || busy.current || gesture.current) return;
     const action = flickAction(direction, geometry ? { width: geometry.widthPt, height: geometry.heightPt } : null);
-    if (!action || action.kind !== 'drag') return;
+    if (!action || action.kind !== 'swipe') return;
     const from = toSurface({ x: action.fromX, y: action.fromY });
     const to = toSurface({ x: action.toX, y: action.toY });
     if (from && to) {

@@ -281,14 +281,8 @@ function isPointerAction(action: DeviceAction): action is Extract<DeviceAction, 
   return action.kind === 'tap' || action.kind === 'double_tap' || action.kind === 'long_press';
 }
 
-/**
- * The entry of the allowed-AI-tools list that governs an action. A drag that
- * stands in for a swipe (the AI's finger flick) is governed by "swipe", so
- * settings that allow swiping keep working and allowing "drag" alone does
- * not enable the AI swipe tool.
- */
+/** The entry of the allowed-AI-tools list that governs an action. */
 export function allowedToolFor(action: DeviceAction): string {
-  if (action.kind === 'drag' && action.asSwipe === true) return 'swipe';
   return ACTION_TOOL[action.kind];
 }
 

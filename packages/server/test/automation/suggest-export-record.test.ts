@@ -208,13 +208,16 @@ describe('recorder', () => {
     expect(h.service.list()).toHaveLength(1);
   });
 
-  it('records finger drags from the Live viewer as swipe steps', async () => {
+  it('records the Live viewer\'s swipes as swipe steps and skips click-drags', async () => {
     h.device.current = 'settings';
     h.service.startRecording('Next videos');
     await h.service.recorderSettled();
-    h.device.emitManual({ kind: 'drag', fromX: 205, fromY: 620, toX: 205, toY: 270, durationMs: 180 });
+    h.device.emitManual({ kind: 'swipe', fromX: 205, fromY: 620, toX: 205, toY: 270, durationMs: 180 });
     await h.service.recorderSettled();
-    h.device.emitManual({ kind: 'drag', fromX: 330, fromY: 450, toX: 90, toY: 452, durationMs: 200 });
+    h.device.emitManual({ kind: 'swipe', fromX: 330, fromY: 450, toX: 90, toY: 452, durationMs: 300 });
+    await h.service.recorderSettled();
+    // Long press mode sends a click-drag (sliders): workflows have no drag step.
+    h.device.emitManual({ kind: 'drag', fromX: 100, fromY: 400, toX: 250, toY: 400, durationMs: 400 });
     await h.service.recorderSettled();
     const wf = h.service.stopRecording(true)!;
     expect(wf.steps.map((step) => ({ type: step.type, direction: 'direction' in step ? step.direction : null }))).toEqual([
