@@ -274,7 +274,7 @@ export class WorkflowService implements WorkflowServiceApi {
     }
     if (settings.get().permissions.controlMode === 'observe') {
       throw new WorkflowError(
-        'Workflows need Assisted or Supervised mode. Observe Only never lets automation touch the iPhone.',
+        'Workflows need Assisted Control or AI Mode. Observe Only never lets automation touch the iPhone.',
         'mode',
         403,
       );

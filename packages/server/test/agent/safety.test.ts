@@ -4,7 +4,7 @@
 
 import { afterEach, describe, expect, it } from 'vitest';
 
-import type { ServerEvent } from '@iphone-ai/shared';
+import type { ApprovalRequest, ServerEvent } from '@iphone-ai/shared';
 
 import { jpegDimensions } from '../../src/ai/image.js';
 import { pngDimensions } from '../../src/device/png.js';
@@ -26,6 +26,17 @@ async function startTask(text: string, conversationId = h.agents.createConversat
   return task;
 }
 
+/** Assisted mode asks for every action: approves the cards before the one `match` picks, and returns that one. */
+async function approvalMatching(match: (approval: ApprovalRequest) => boolean): Promise<ApprovalRequest> {
+  for (;;) {
+    await waitFor(() => h.approvals.listPending().length === 1);
+    const pending = h.approvals.listPending()[0]!;
+    if (match(pending)) return pending;
+    h.approvals.decide(pending.id, 'approved', 'user');
+    await waitFor(() => !h.approvals.listPending().some((a) => a.id === pending.id));
+  }
+}
+
 describe('blocked apps reached by a partial name or already on screen (control-safety#0)', () => {
   it('denies open_app with a fragment of a blocked name and never sends launch_app', async () => {
     h = await createHarness('supervised');
@@ -42,8 +53,8 @@ describe('blocked apps reached by a partial name or already on screen (control-s
     expect(h.phone().stack).not.toContain('app:Wallet');
   });
 
-  it('tells the model when a blocked app is open and requires approval for actions inside it (Home stays free)', async () => {
-    h = await createHarness('supervised');
+  it('tells the model when a blocked app is open and flags actions inside it on the card (Home stays free)', async () => {
+    h = await createHarness('assisted');
     h.writeState({ screen: 'app:Wallet', resetSeq: 1 });
     const seen: string[] = [];
     h.setScript(({ turn, lastResultText: text }) => {
@@ -57,18 +68,22 @@ describe('blocked apps reached by a partial name or already on screen (control-s
     const pending = h.approvals.listPending()[0]!;
     expect(pending.reasons.join(' ')).toMatch(/blocked app \(Wallet\) appears to be open/);
     h.approvals.decide(pending.id, 'rejected', 'user');
+    // Going Home is asked like every Assisted action, without the blocked-app warning.
+    const home = await approvalMatching((a) => a.id !== pending.id);
+    expect(home.reasons.join(' ')).not.toMatch(/blocked app/);
+    h.approvals.decide(home.id, 'approved', 'user');
     await waitForTask(h, task.id);
     expect(seen[0]).toContain('SAFETY: A blocked app (Wallet) appears to be open');
     expect(toolCalls(['tap'])).toEqual([]);
     expect(toolCalls(['press_home']).length).toBe(1);
-    expect(requested().length).toBe(1);
+    expect(requested().length).toBe(2);
     expect(h.activity.query({ categories: ['policy'] }).some((e) => e.type === 'policy.blocked_app_on_screen')).toBe(true);
   });
 });
 
 describe('line breaks in type_text (control-safety#1)', () => {
-  it('asks before typing text that ends in Return; rejecting it types nothing', async () => {
-    h = await createHarness('supervised');
+  it('warns before typing text that ends in Return; rejecting it types nothing', async () => {
+    h = await createHarness('assisted');
     h.writeState({ screen: 'safari', resetSeq: 1 });
     h.setScript(({ turn, lastResultText: text }) => {
       if (turn === 0) return { toolCalls: [call('tap', { element_id: idOf(text, 'Search or enter website name'), reason: 'focus' })] };
@@ -76,8 +91,7 @@ describe('line breaks in type_text (control-safety#1)', () => {
       return { toolCalls: [call('finish_task', { status: 'needs_user', summary: 'rejected' })] };
     });
     const task = await startTask('Open attacker.example');
-    await waitFor(() => h.approvals.listPending().length === 1);
-    const pending = h.approvals.listPending()[0]!;
+    const pending = await approvalMatching((a) => a.action.tool === 'type_text');
     expect(pending.reasons.join(' ')).toMatch(/line break/);
     // The card shows the Return.
     expect(pending.summary).toContain('attacker.example⏎');
@@ -197,7 +211,7 @@ describe('approval re-checks the screen before acting (control-safety#3, robustn
 });
 
 describe('drafts typed by someone else (control-safety#5)', () => {
-  it('a later task cannot send a draft typed by an earlier task without approval', async () => {
+  it('the card warns when a later task may send a draft typed by an earlier task', async () => {
     h = await createHarness('supervised');
     h.writeState({ screen: 'conversation:Mom', resetSeq: 1 });
     const conversationId = h.agents.createConversation().id;
@@ -208,6 +222,7 @@ describe('drafts typed by someone else (control-safety#5)', () => {
     });
     const first = await startTask('Draft "I quit" to Mom but do not send', conversationId);
     await waitForTask(h, first.id);
+    h.settings.update({ permissions: { controlMode: 'assisted' } });
 
     h.setScript(({ turn }) =>
       turn === 0
@@ -222,8 +237,8 @@ describe('drafts typed by someone else (control-safety#5)', () => {
     expect(h.phone().conversations.Mom!.some((m) => m.from === 'me')).toBe(false);
   });
 
-  it('text the user typed by hand also needs approval before an AI tap sends it', async () => {
-    h = await createHarness('supervised');
+  it('the card also warns before an AI tap sends text the user typed by hand', async () => {
+    h = await createHarness('assisted');
     h.settings.update({ permissions: { manualControlEnabled: true } });
     h.writeState({ screen: 'conversation:Mom', resetSeq: 1 });
     const allow = { verdict: 'allow' as const, risk: 'low' as const, reasons: [], rules: [] };
@@ -236,6 +251,7 @@ describe('drafts typed by someone else (control-safety#5)', () => {
     );
     const task = await startTask('Tap the arrow');
     await waitFor(() => h.approvals.listPending().length === 1);
+    expect(h.approvals.listPending()[0]!.reasons.join(' ')).toMatch(/send or submit/);
     h.approvals.decide(h.approvals.listPending()[0]!.id, 'rejected', 'user');
     await waitForTask(h, task.id);
     expect(h.phone().conversations.Mom!.some((m) => m.from === 'me')).toBe(false);
@@ -244,7 +260,7 @@ describe('drafts typed by someone else (control-safety#5)', () => {
 
 describe('approval cards show the text being typed (control-safety#6)', () => {
   it('shows the full text live, but stores and audits only the character count', async () => {
-    h = await createHarness('supervised');
+    h = await createHarness('assisted');
     const secretish = 'transfer 5000 to SA03 8000 1234';
     h.setScript(({ turn }) =>
       turn === 0
@@ -265,6 +281,38 @@ describe('approval cards show the text being typed (control-safety#6)', () => {
     const resolved = h.events.filter((e) => e.type === 'approval_resolved');
     expect(JSON.stringify(resolved)).not.toContain('SA03');
     expect(JSON.stringify(h.activity.query({}))).not.toContain('SA03');
+  });
+});
+
+describe('AI Mode never asks for approval', () => {
+  it('types and sends a message on its own, with no approval card', async () => {
+    h = await createHarness('supervised');
+    h.writeState({ screen: 'conversation:Mom', resetSeq: 1 });
+    h.setScript(({ turn, lastResultText: text }) => {
+      if (turn === 0) return { toolCalls: [call('tap', { element_id: idOf(text, 'iMessage'), reason: 'focus' })] };
+      if (turn === 1) return { toolCalls: [call('type_text', { text: 'On my way', reason: 'reply' })] };
+      if (turn === 2) return { toolCalls: [call('tap', { x: 378, y: 800, reason: 'send' })] };
+      return { toolCalls: [call('finish_task', { status: 'success', summary: 'Sent', evidence: ['On my way'] })] };
+    });
+    const task = await startTask('Tell Mom I am on my way');
+    await waitForTask(h, task.id);
+    expect(requested()).toEqual([]);
+    expect(h.phone().conversations.Mom!.some((m) => m.from === 'me')).toBe(true);
+  });
+
+  it('still refuses blocked apps outright', async () => {
+    h = await createHarness('supervised');
+    let result = '';
+    h.setScript(({ turn, lastResultText: text }) => {
+      if (turn === 0) return { toolCalls: [call('open_app', { name: 'Wallet', reason: 'pay' })] };
+      result = text;
+      return { toolCalls: [call('finish_task', { status: 'failed', summary: 'blocked' })] };
+    });
+    const task = await startTask('Open Wallet');
+    await waitForTask(h, task.id);
+    expect(result).toContain('BLOCKED');
+    expect(requested()).toEqual([]);
+    expect(toolCalls(['launch_app'])).toEqual([]);
   });
 });
 

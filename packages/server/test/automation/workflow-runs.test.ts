@@ -213,7 +213,7 @@ describe('workflow runs', () => {
       d.permissions.controlMode = 'observe';
     });
     const id = workflow([{ id: 'a', type: 'press_home' }]);
-    await expect(h.service.run(id, 'user')).rejects.toThrow('Workflows need Assisted or Supervised mode');
+    await expect(h.service.run(id, 'user')).rejects.toThrow('Workflows need Assisted Control or AI Mode');
     expect(h.device.currentLease).toBeNull();
     expect(h.service.runs(id)).toHaveLength(0);
   });

@@ -1,4 +1,4 @@
-// Current control mode (Observe Only / Assisted / Supervised). Moving to a
+// Current control mode (Observe Only / Assisted / AI Mode). Moving to a
 // mode with more AI autonomy asks for confirmation and explains what changes.
 // Remote devices may only switch to Observe Only (the backend enforces this).
 

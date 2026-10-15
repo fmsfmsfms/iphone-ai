@@ -30,16 +30,16 @@ test('escalating the control mode asks first; going back to Observe Only does no
 
   // Confirm an escalation.
   await bar.getByRole('button', { name: 'Control mode: Observe Only' }).click();
-  await menu.getByRole('menuitemradio', { name: /^Supervised/ }).click();
-  const confirm2 = page.getByRole('alertdialog', { name: 'Switch to Supervised?' });
-  await confirm2.getByRole('button', { name: 'Switch to Supervised' }).click();
-  await expect(bar.getByRole('button', { name: 'Control mode: Supervised' })).toBeVisible();
+  await menu.getByRole('menuitemradio', { name: /^AI Mode/ }).click();
+  const confirm2 = page.getByRole('alertdialog', { name: 'Switch to AI Mode?' });
+  await confirm2.getByRole('button', { name: 'Switch to AI Mode' }).click();
+  await expect(bar.getByRole('button', { name: 'Control mode: AI Mode' })).toBeVisible();
   expect((await getSettings(page)).permissions.controlMode).toBe('supervised');
   await waitForRestartAfter(page, starts);
 
   // De-escalation applies at once, without a dialog.
   const starts2 = mockStarts();
-  await bar.getByRole('button', { name: 'Control mode: Supervised' }).click();
+  await bar.getByRole('button', { name: 'Control mode: AI Mode' }).click();
   await menu.getByRole('menuitemradio', { name: /^Observe Only/ }).click();
   await expect(page.getByRole('alertdialog')).toHaveCount(0);
   await expect(bar.getByRole('button', { name: 'Control mode: Observe Only' })).toBeVisible();

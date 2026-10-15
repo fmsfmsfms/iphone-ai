@@ -369,7 +369,7 @@ export async function viewerSrc(page: Page): Promise<string> {
 }
 
 /** Switches the control mode from the status bar, confirming the escalation dialog. */
-export async function switchModeInUi(page: Page, mode: 'Assisted' | 'Supervised'): Promise<void> {
+export async function switchModeInUi(page: Page, mode: 'Assisted' | 'AI Mode'): Promise<void> {
   await statusBar(page).getByRole('button', { name: /^Control mode:/ }).click();
   // (The dashboard's onboarding card has its own inline copy of the same menu.)
   await page.getByRole('dialog', { name: /^Control mode:/ }).getByRole('menuitemradio', { name: new RegExp(`^${mode}`) }).click();

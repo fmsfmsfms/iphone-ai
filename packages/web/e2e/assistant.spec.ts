@@ -1,6 +1,7 @@
 // AI assistant against the scripted fake model (local OpenAI-compatible
 // provider) and the mock phone:
-// 5. Supervised: open Settings → tap "Wi-Fi" → finish, verified on screen.
+// 5. AI Mode: open Settings → tap "Wi-Fi" → finish, verified on screen; an
+//    action Assisted would flag runs without an approval card.
 // 6. Assisted: every action waits for an approval card; approve runs it,
 //    reject does not.
 //    An approval nobody answers expires and counts as "no".
@@ -54,7 +55,7 @@ async function openSteps(page: Page): Promise<Locator> {
   return taskSteps(page);
 }
 
-test('Supervised: the AI opens Settings, taps Wi-Fi and the result is verified on screen', async ({ page }) => {
+test('AI Mode: the AI opens Settings, taps Wi-Fi and the result is verified on screen', async ({ page }) => {
   await scriptModel([
     { text: 'Opening Settings.', tool: 'open_app', args: { name: 'Settings', reason: 'Wi-Fi lives in Settings' } },
     { tool: 'tap', args: { element_id: '$id:Wi-Fi', reason: 'Open the Wi-Fi settings' } },
@@ -63,7 +64,7 @@ test('Supervised: the AI opens Settings, taps Wi-Fi and the result is verified o
 
   // Mode change through the UI, with its confirmation.
   const starts = mockStarts();
-  await switchModeInUi(page, 'Supervised');
+  await switchModeInUi(page, 'AI Mode');
   await waitForRestartAfter(page, starts);
   expect((await getSettings(page)).permissions.controlMode).toBe('supervised');
 
@@ -96,6 +97,26 @@ test('Supervised: the AI opens Settings, taps Wi-Fi and the result is verified o
   expect(log.requests.flatMap((r) => r.problems)).toEqual([]);
   // A text-only local model only gets the iPhone tools of the current mode.
   expect(log.requests[0]?.tools).toEqual(expect.arrayContaining(['open_app', 'tap', 'finish_task']));
+});
+
+test('AI Mode: an action Assisted would flag runs without an approval card', async ({ page }) => {
+  await setControl(page, { mode: 'supervised' });
+  // A very short app name: Spotlight could open anything, so Assisted mode warns about it on the card.
+  await scriptModel([
+    { tool: 'open_app', args: { name: 'Ab', reason: 'The user asked for Ab' } },
+    { tool: 'finish_task', args: { status: 'failed', summary: 'Ab did not open.' } },
+  ]);
+  await openRoute(page, '#/assistant/new');
+  const mark = readCalls().length;
+  const since = Date.now();
+  await sendInstruction(page, 'Open Ab.');
+
+  await waitForCall((c) => c.name === 'launch_app', { since: mark, timeout: 30_000 });
+  await expect(page.getByText('Failed', { exact: true }).last()).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByRole('article', { name: 'Approval request' })).toHaveCount(0);
+  const recent = await api<{ createdAt: number }[]>(page, 'GET', '/api/approvals?status=recent');
+  expect(recent.filter((a) => a.createdAt >= since)).toEqual([]);
+  expect(callsSince(mark).filter((c) => c.name === 'launch_app').map((c) => c.args.name)).toEqual(['Ab']);
 });
 
 test('Assisted: approving runs the action, rejecting does not', async ({ page }) => {

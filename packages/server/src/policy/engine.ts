@@ -251,6 +251,12 @@ class DecisionBuilder {
     return this;
   }
 
+  /** Lets an action that would need approval run as is; the rules that fired stay for the audit log. */
+  waiveApprovals(): this {
+    if (this.verdict === 'require_approval') this.verdict = 'allow';
+    return this;
+  }
+
   get denied(): boolean {
     return this.verdict === 'deny';
   }
@@ -478,6 +484,8 @@ export function evaluatePolicy(input: PolicyInput): PolicyDecision {
   if (!d.denied && input.mode === 'assisted') {
     d.approval('mode.assisted', 'Assisted Control: every action needs your approval.', 'low');
   }
+  // AI Mode: the user chose full autonomy, so nothing waits for approval. Denials still apply.
+  if (input.mode === 'supervised') d.waiveApprovals();
 
   return d.build();
 }

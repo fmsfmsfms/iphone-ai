@@ -108,7 +108,7 @@ describe('manual control and safety routes', () => {
     expect(res.statusCode).toBe(200);
     expect(res.json()).toMatchObject({ permissions: { controlMode: 'supervised' } });
     const events = h.ctx.activity.query({ categories: ['settings'] });
-    expect(events[0]?.summary).toBe('Control mode changed to Supervised Automation.');
+    expect(events[0]?.summary).toBe('Control mode changed to AI Mode.');
     await vi.waitFor(() => expect(h.fakes.mirroir.restart).toHaveBeenCalledTimes(1));
   });
 

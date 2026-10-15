@@ -27,9 +27,11 @@ phone that you did not allow, and so that you can always stop it.
    control mode, allowed actions, blocked apps (launches, taps on app labels, typed app
    names — Mirroir only guards launches), sensitive keywords (send, delete, buy, transfer,
    sign out, allow, …) → approval, password/OTP/passcode screens → typing refused,
-   "submit after typing" → approval, non-web URL schemes → approval.
-3. **Approvals** — a card with what will happen and why it needs approval. Timeouts
-   count as "no". Every decision is recorded.
+   "submit after typing" → approval, non-web URL schemes → approval. In **AI Mode** every
+   approval is waived (the action runs; the flagged rules are still recorded); denials apply
+   in every mode.
+3. **Approvals** (Assisted Control) — a card with what will happen and why it needs
+   approval. Timeouts count as "no". Every decision is recorded.
 4. **Control lease** — only one controller (you, an AI task, or a workflow) at a time.
    Manual input is refused while a task is in control unless you pause it.
 5. **Geometry checks** — touches are refused if the iPhone Mirroring window changed size

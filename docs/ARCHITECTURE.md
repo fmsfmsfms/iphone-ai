@@ -90,7 +90,7 @@ helper cannot start a gesture (see `device/input-helper.ts`, `shared/src/swipe.t
 
 - **Observe Only** (default): AI tools are `observe_screen`, `wait`, `finish_task`. Mirroir has no input tools unless manual control is enabled.
 - **Assisted Control**: every AI action becomes an approval card.
-- **Supervised Automation**: AI acts within the task; sensitive actions still require approval; denied rules are never approvable.
+- **AI Mode** (stored as `supervised`): AI acts within the task without approval cards — rules that would ask are waived (kept in the decision for the audit log); denials (blocked apps, deny rules, auth-screen typing, allowed actions, STOP) still apply.
 
 Manual control (clicking the live viewer) is a separate switch, refused while an AI task or workflow holds the control lease (unless it is paused).
 

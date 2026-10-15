@@ -122,7 +122,7 @@ describe('AI and workflow actors', () => {
     expect(evaluate({ mode: 'assisted', action: swipe, target: null }).rules).toEqual(['mode.assisted']);
   });
 
-  it('allows a plain supervised tap on a safe label', () => {
+  it('allows a plain AI Mode tap on a safe label', () => {
     expect(evaluate()).toEqual({ verdict: 'allow', risk: 'low', reasons: [], rules: [] });
     expect(evaluate({ actor: 'workflow', label: 'Wi-Fi' }).verdict).toBe('allow');
     expect(evaluate({ action: { kind: 'press_home' }, target: null }).verdict).toBe('allow');
@@ -143,6 +143,25 @@ describe('AI and workflow actors', () => {
     expect(denied.verdict).toBe('deny');
     expect(denied.rules).not.toContain('mode.assisted');
   });
+
+  it('asks for nothing in AI Mode, but keeps what the rules flagged for the card-less audit log', () => {
+    const d = evaluate({ label: 'Delete Account', context: { pendingTypedText: true, screenTexts: ['Apple Pay', 'Double Click to Pay'] } });
+    expect(d).toMatchObject({ verdict: 'allow', risk: 'high', rules: ['sensitive.destructive', 'commit.after_typing', 'screen.payment'] });
+    // The same action in Assisted mode shows those reasons on the approval card.
+    expect(evaluate({ mode: 'assisted', label: 'Delete Account' })).toMatchObject({
+      verdict: 'require_approval',
+      rules: ['sensitive.destructive', 'mode.assisted'],
+    });
+  });
+
+  it('still denies in AI Mode what is never allowed', () => {
+    expect(evaluate({ action: { kind: 'launch_app', name: 'Wallet' }, target: null }).verdict).toBe('deny');
+    expect(evaluate({ action: { kind: 'type_text', text: '123456' }, target: null, context: { screenTexts: ['Enter Passcode'] } }).verdict).toBe('deny');
+    const noBuy = permissions({ sensitiveRules: [{ id: 'no-buy', label: 'No purchases', keywords: ['buy'], effect: 'deny', enabled: true }] });
+    expect(evaluate({ permissions: noBuy, label: 'Buy Now' }).verdict).toBe('deny');
+    expect(evaluate({ permissions: permissions({ aiAllowedTools: ['tap'] }), action: { kind: 'press_home' }, target: null }).verdict).toBe('deny');
+    expect(evaluate({ stopLatched: true }).verdict).toBe('deny');
+  });
 });
 
 describe('blocked apps', () => {
@@ -151,11 +170,11 @@ describe('blocked apps', () => {
     expect(d).toMatchObject({ verdict: 'deny', risk: 'high', rules: ['blocked_app.launch'] });
     expect(evaluate({ action: { kind: 'launch_app', name: 'paypal' } }).rules).toEqual(['blocked_app.launch']);
     expect(evaluate({ action: { kind: 'launch_app', name: 'Bank of America' } }).rules).toEqual(['blocked_app.launch']);
-    expect(evaluate({ action: { kind: 'launch_app', name: 'Settings' } }).verdict).toBe('allow');
+    expect(evaluate({ action: { kind: 'launch_app', name: 'Settings' } }).rules).toEqual([]);
   });
 
   it('matches whole words only ("Bank" does not block "Banking News")', () => {
-    expect(evaluate({ action: { kind: 'launch_app', name: 'Banking News' } }).verdict).toBe('allow');
+    expect(evaluate({ action: { kind: 'launch_app', name: 'Banking News' } }).rules).toEqual([]);
   });
 
   it('denies tapping a blocked app icon or its settings row', () => {
@@ -176,9 +195,9 @@ describe('blocked apps', () => {
 });
 
 describe('sensitive rules', () => {
-  it('requires approval when a tap target matches a sensitive keyword', () => {
+  it('flags a tap target that matches a sensitive keyword', () => {
     const d = evaluate({ label: 'Delete Account' });
-    expect(d).toMatchObject({ verdict: 'require_approval', risk: 'high', rules: ['sensitive.destructive'] });
+    expect(d).toMatchObject({ verdict: 'allow', risk: 'high', rules: ['sensitive.destructive'] });
     expect(d.reasons[0]).toContain('"delete"');
     expect(evaluate({ label: 'Send' }).rules).toEqual(['sensitive.messaging']);
     expect(evaluate({ label: 'Allow' }).rules).toEqual(['sensitive.security']);
@@ -188,12 +207,12 @@ describe('sensitive rules', () => {
   it('matches Arabic keywords (substring match for non-Latin scripts)', () => {
     expect(evaluate({ label: 'حذف الحساب' }).rules).toEqual(['sensitive.destructive']);
     const typed = evaluate({ action: { kind: 'type_text', text: 'تم إرسال الرسالة' }, target: null });
-    expect(typed).toMatchObject({ verdict: 'require_approval', rules: ['sensitive.messaging.text'] });
+    expect(typed).toMatchObject({ verdict: 'allow', rules: ['sensitive.messaging.text'] });
   });
 
-  it('asks before plain "Pay" / "Order now" buttons and the Arabic order and pay words', () => {
+  it('flags plain "Pay" / "Order now" buttons and the Arabic order and pay words', () => {
     for (const label of ['Pay', 'Pay SAR 49.00', 'Apple Pay', 'Payment', 'Order now', 'Checkout', 'اطلب الآن', 'أطلب', 'ادفع الآن', 'الدفع']) {
-      expect(evaluate({ label }), label).toMatchObject({ verdict: 'require_approval', rules: ['sensitive.payment'] });
+      expect(evaluate({ label }), label).toMatchObject({ verdict: 'allow', rules: ['sensitive.payment'] });
     }
     // Whole words only for Latin keywords: none of these is a payment.
     const rules = permissions().sensitiveRules;
@@ -208,7 +227,7 @@ describe('sensitive rules', () => {
     expect(evaluate({ action: { kind: 'type_text', text: 'please transfer 100' }, target: null }).rules).toEqual([
       'sensitive.payment.text',
     ]);
-    expect(evaluate({ action: { kind: 'type_text', text: 'hello world' }, target: null }).verdict).toBe('allow');
+    expect(evaluate({ action: { kind: 'type_text', text: 'hello world' }, target: null }).rules).toEqual([]);
   });
 
   it('denies outright when a rule has effect "deny" and ignores disabled rules', () => {
@@ -218,7 +237,7 @@ describe('sensitive rules', () => {
     ];
     const p = permissions({ sensitiveRules: rules });
     expect(evaluate({ permissions: p, label: 'Buy Now' })).toMatchObject({ verdict: 'deny', rules: ['sensitive.no-buy'] });
-    expect(evaluate({ permissions: p, label: 'General' }).verdict).toBe('allow');
+    expect(evaluate({ permissions: p, label: 'General' }).rules).toEqual([]);
     expect(evaluate({ permissions: p, action: { kind: 'type_text', text: 'buy it' }, target: null }).rules).toEqual([
       'sensitive.no-buy.text',
     ]);
@@ -228,13 +247,13 @@ describe('sensitive rules', () => {
 describe('authentication and payment screens', () => {
   const authScreen = { screenTexts: ['Enter Passcode', 'Cancel'] };
 
-  it('denies typing on an auth prompt and asks approval for other actions', () => {
+  it('denies typing on an auth prompt and flags other actions', () => {
     const typing = evaluate({ action: { kind: 'type_text', text: '123456' }, target: null, context: authScreen });
     expect(typing).toMatchObject({ verdict: 'deny', rules: ['auth.typing'] });
     expect(typing.reasons[0]).toContain('Enter Passcode');
 
     const tap = evaluate({ label: 'Cancel', context: authScreen });
-    expect(tap).toMatchObject({ verdict: 'require_approval', risk: 'high', rules: ['screen.auth'] });
+    expect(tap).toMatchObject({ verdict: 'allow', risk: 'high', rules: ['screen.auth'] });
     expect(evaluate({ action: { kind: 'press_home' }, target: null, context: authScreen }).rules).toEqual(['screen.auth']);
   });
 
@@ -256,13 +275,13 @@ describe('authentication and payment screens', () => {
     expect(evaluate({ permissions: p, action: { kind: 'type_text', text: 'hello' }, label: 'Password', context: authScreen }).verdict).toBe(
       'allow',
     );
-    // Other actions still need approval on that screen.
+    // Other actions are still flagged on that screen.
     expect(evaluate({ permissions: p, label: 'OK', context: authScreen }).rules).toEqual(['screen.auth']);
   });
 
-  it('requires approval on a payment sheet', () => {
+  it('flags actions on a payment sheet', () => {
     const d = evaluate({ label: 'Continue', context: { screenTexts: ['Apple Pay', 'Double Click to Pay'] } });
-    expect(d).toMatchObject({ verdict: 'require_approval', risk: 'high', rules: ['screen.payment'] });
+    expect(d).toMatchObject({ verdict: 'allow', risk: 'high', rules: ['screen.payment'] });
     expect(evaluate({ label: 'Done', context: { screenTexts: ['Card Number', 'CVV'] } }).rules).toEqual(['screen.payment']);
   });
 });
@@ -270,20 +289,20 @@ describe('authentication and payment screens', () => {
 describe('commit after typing', () => {
   const typed = { pendingTypedText: true };
 
-  it('requires approval for Return after typing (any case), not without typing', () => {
+  it('flags Return after typing (any case), not without typing', () => {
     expect(evaluate({ action: { kind: 'press_key', key: 'return' }, target: null, context: typed }).rules).toEqual(['commit.after_typing']);
-    expect(evaluate({ action: { kind: 'press_key', key: 'Enter' }, target: null, context: typed }).verdict).toBe('require_approval');
-    expect(evaluate({ action: { kind: 'press_key', key: 'return' }, target: null }).verdict).toBe('allow');
-    expect(evaluate({ action: { kind: 'press_key', key: 'delete' }, target: null, context: typed }).verdict).toBe('allow');
+    expect(evaluate({ action: { kind: 'press_key', key: 'Enter' }, target: null, context: typed }).rules).toEqual(['commit.after_typing']);
+    expect(evaluate({ action: { kind: 'press_key', key: 'return' }, target: null }).rules).toEqual([]);
+    expect(evaluate({ action: { kind: 'press_key', key: 'delete' }, target: null, context: typed }).rules).toEqual([]);
   });
 
-  it('requires approval for an unlabeled tap (e.g. the send arrow) after typing', () => {
+  it('flags an unlabeled tap (e.g. the send arrow) after typing', () => {
     const d = evaluate({ label: null, context: typed });
-    expect(d.verdict).toBe('require_approval');
+    expect(d.verdict).toBe('allow');
     expect(d.rules).toEqual(['target.unlabeled', 'commit.after_typing']);
   });
 
-  it('requires approval for "Send"-like labels after typing', () => {
+  it('flags "Send"-like labels after typing', () => {
     const send = evaluate({ label: 'Send', context: typed });
     expect(send.rules).toEqual(['sensitive.messaging', 'commit.after_typing']);
     for (const label of ['Done', 'Go', 'Search', 'OK', 'Continue', 'Next', 'Submit']) {
@@ -295,11 +314,10 @@ describe('commit after typing', () => {
     // Real device: after a refused re-check the clear-search icon read as "a", and the same tap ran without approval.
     for (const label of ['a', '@', 'X', 'ب', '1']) {
       const d = evaluate({ label, context: typed });
-      expect(d.verdict, label).toBe('require_approval');
       expect(d.rules, label).toEqual(['target.unlabeled', 'commit.after_typing']);
     }
     // Two letters or digits are readable.
-    expect(evaluate({ label: 'Wi', context: typed }).verdict).toBe('allow');
+    expect(evaluate({ label: 'Wi', context: typed }).rules).toEqual([]);
     // A readable row candidate next to the glyph does not make the target itself known.
     expect(evaluate({ target: { label: 'a', candidates: ['Notes'] }, context: typed }).rules).toEqual(['target.unlabeled', 'commit.after_typing']);
   });
@@ -309,9 +327,9 @@ describe('commit after typing', () => {
     expect(d.rules).toContain('target.unlabeled_near_sensitive');
   });
 
-  it('allows a safe label after typing in supervised mode', () => {
-    expect(evaluate({ label: 'Notes', context: typed }).verdict).toBe('allow');
-    expect(evaluate({ label: 'Cancel Guest', context: typed }).verdict).toBe('allow');
+  it('does not flag a safe label after typing', () => {
+    expect(evaluate({ label: 'Notes', context: typed }).rules).toEqual([]);
+    expect(evaluate({ label: 'Cancel Guest', context: typed }).rules).toEqual([]);
   });
 });
 
@@ -320,8 +338,8 @@ describe('URLs', () => {
   const url = (u: string) => evaluate({ permissions: withUrl, action: { kind: 'open_url', url: u }, target: null });
 
   it('allows http and https', () => {
-    expect(url('https://example.com/path?q=1').verdict).toBe('allow');
-    expect(url('http://example.com').verdict).toBe('allow');
+    expect(url('https://example.com/path?q=1').rules).toEqual([]);
+    expect(url('http://example.com').rules).toEqual([]);
   });
 
   it('never opens javascript:, data: or file: URLs', () => {
@@ -330,9 +348,9 @@ describe('URLs', () => {
     }
   });
 
-  it('asks before opening other schemes that start calls, messages or apps', () => {
+  it('flags other schemes that start calls, messages or apps', () => {
     for (const u of ['tel:+15555550100', 'sms:+15555550100', 'shortcuts://run-shortcut?name=x']) {
-      expect(url(u)).toMatchObject({ verdict: 'require_approval', risk: 'high', rules: ['url.scheme'] });
+      expect(url(u)).toMatchObject({ verdict: 'allow', risk: 'high', rules: ['url.scheme'] });
     }
   });
 
@@ -395,14 +413,14 @@ describe('launch names that Spotlight resolves to a blocked app', () => {
 
   it('still allows ordinary apps (and whole-word containment stays whole-word)', () => {
     for (const name of ['Settings', 'Safari', 'Messages', 'Photos', 'Wallpaper', 'App Store', 'Banking News', 'Gmail']) {
-      expect(launch(name).verdict, name).toBe('allow');
+      expect(launch(name).rules, name).toEqual([]);
     }
   });
 
-  it('asks before opening a whole word of a longer blocked name, or a very short name', () => {
-    expect(launch('Google')).toMatchObject({ verdict: 'require_approval', rules: ['launch.partial_blocked_name'] });
+  it('flags a whole word of a longer blocked name, or a very short name', () => {
+    expect(launch('Google')).toMatchObject({ verdict: 'allow', rules: ['launch.partial_blocked_name'] });
     expect(launch('Microsoft').rules).toEqual(['launch.partial_blocked_name']);
-    expect(launch('TV')).toMatchObject({ verdict: 'require_approval', rules: ['launch.short_name'] });
+    expect(launch('TV')).toMatchObject({ verdict: 'allow', rules: ['launch.short_name'] });
   });
 
   it('denies names with control or invisible characters', () => {
@@ -421,7 +439,7 @@ describe('launch names that Spotlight resolves to a blocked app', () => {
     const type = (text: string, screenTexts: string[]) => evaluate({ action: { kind: 'type_text', text }, target: null, context: { screenTexts } });
     expect(type('Walle', ['Siri Suggestions', 'Settings'])).toMatchObject({ verdict: 'deny', rules: ['blocked_app.typed'] });
     expect(type('Walle', ['Top Hit', 'Wallet'])).toMatchObject({ verdict: 'deny', rules: ['blocked_app.typed'] });
-    expect(type('Walle', ['Notes', 'New Note']).verdict).toBe('allow');
+    expect(type('Walle', ['Notes', 'New Note']).rules).toEqual([]);
   });
 });
 
@@ -429,13 +447,13 @@ describe('a blocked app already on screen', () => {
   const header = { blockedForeground: { app: 'Wallet', label: 'Wallet', where: 'header' as const } };
   const topHit = { blockedForeground: { app: 'Wallet', label: 'Wallet', where: 'top_hit' as const } };
 
-  it('requires approval for every action inside it except leaving', () => {
-    expect(evaluate({ label: 'Apple Cash', context: header })).toMatchObject({ verdict: 'require_approval', rules: ['blocked_app.foreground'] });
+  it('flags every action inside it except leaving', () => {
+    expect(evaluate({ label: 'Apple Cash', context: header })).toMatchObject({ verdict: 'allow', rules: ['blocked_app.foreground'] });
     expect(evaluate({ action: { kind: 'swipe', fromX: 1, fromY: 2, toX: 3, toY: 4 }, target: null, context: header }).rules).toEqual([
       'blocked_app.foreground',
     ]);
-    expect(evaluate({ action: { kind: 'press_home' }, target: null, context: header }).verdict).toBe('allow');
-    expect(evaluate({ action: { kind: 'launch_app', name: 'Settings' }, target: null, context: header }).verdict).toBe('allow');
+    expect(evaluate({ action: { kind: 'press_home' }, target: null, context: header }).rules).toEqual([]);
+    expect(evaluate({ action: { kind: 'launch_app', name: 'Settings' }, target: null, context: header }).rules).toEqual([]);
   });
 
   it("denies Return when Spotlight's top hit is a blocked app", () => {
@@ -443,16 +461,16 @@ describe('a blocked app already on screen', () => {
       verdict: 'deny',
       rules: ['blocked_app.top_hit'],
     });
-    expect(evaluate({ action: { kind: 'press_key', key: 'delete' }, target: null, context: topHit }).verdict).toBe('allow');
+    expect(evaluate({ action: { kind: 'press_key', key: 'delete' }, target: null, context: topHit }).rules).toEqual([]);
   });
 });
 
 describe('line breaks and control characters in typed text', () => {
   const type = (text: string) => evaluate({ action: { kind: 'type_text', text }, target: null });
 
-  it('treats a line break as a commit that needs approval (Mirroir types it as Return)', () => {
+  it('flags a line break as a commit (Mirroir types it as Return)', () => {
     for (const text of ['On my way\n', 'x\r', 'x\r\n', 'a\nb']) {
-      expect(type(text), JSON.stringify(text)).toMatchObject({ verdict: 'require_approval', risk: 'high', rules: ['commit.in_text'] });
+      expect(type(text), JSON.stringify(text)).toMatchObject({ verdict: 'allow', risk: 'high', rules: ['commit.in_text'] });
     }
     // Also when nothing was typed before, and in Assisted mode alongside the mode rule.
     expect(evaluate({ mode: 'assisted', action: { kind: 'type_text', text: 'hi\n' }, target: null }).rules).toEqual([
@@ -461,11 +479,11 @@ describe('line breaks and control characters in typed text', () => {
     ]);
   });
 
-  it('denies raw control characters and asks before a Tab', () => {
+  it('denies raw control characters and flags a Tab', () => {
     expect(type('ding\u0007')).toMatchObject({ verdict: 'deny', rules: ['text.control_chars'] });
     expect(type('a\u001bb').verdict).toBe('deny');
-    expect(type('name\tvalue')).toMatchObject({ verdict: 'require_approval', rules: ['text.tab'] });
-    expect(type('plain text').verdict).toBe('allow');
+    expect(type('name\tvalue')).toMatchObject({ verdict: 'allow', rules: ['text.tab'] });
+    expect(type('plain text').rules).toEqual([]);
   });
 });
 
@@ -478,20 +496,20 @@ describe('coordinate taps that may hit a labelled control', () => {
     const wallet = tapWith(['Wallet & Apple Pay']);
     expect(wallet).toMatchObject({ verdict: 'deny', rules: ['blocked_app.target', 'sensitive.payment', 'target.unlabeled'] });
     expect(wallet.reasons[0]).toContain('may hit "Wallet & Apple Pay"');
-    expect(tapWith(['Privacy & Security'])).toMatchObject({ verdict: 'require_approval', rules: ['sensitive.security', 'target.unlabeled'] });
+    expect(tapWith(['Privacy & Security'])).toMatchObject({ verdict: 'allow', rules: ['sensitive.security', 'target.unlabeled'] });
     const second = evaluate({ action: { kind: 'tap', x: 110, y: 412 }, target: { label: 'Health', candidates: ['Health', 'Wallet'] } });
     expect(second).toMatchObject({ verdict: 'deny', rules: ['blocked_app.target'] });
     expect(second.reasons[0]).toContain('may hit "Wallet"');
-    expect(tapWith(['General']).verdict).toBe('allow');
+    expect(tapWith(['General']).rules).toEqual(['target.unlabeled']);
   });
 
   it('a row candidate does not make an unlabeled target safe after typing (the send arrow next to the draft)', () => {
     const d = evaluate({ action: { kind: 'tap', x: 378, y: 800 }, target: { label: null, candidates: ['I quit'] }, context: { pendingTypedText: true } });
-    expect(d).toMatchObject({ verdict: 'require_approval', rules: ['target.unlabeled', 'commit.after_typing'] });
+    expect(d).toMatchObject({ verdict: 'allow', rules: ['target.unlabeled', 'commit.after_typing'] });
   });
 
-  it('asks before a blind tap right next to sensitive or blocked text', () => {
-    expect(tapWith([], ['Delete'])).toMatchObject({ verdict: 'require_approval', rules: ['target.unlabeled', 'target.unlabeled_near_sensitive'] });
+  it('flags a blind tap right next to sensitive or blocked text', () => {
+    expect(tapWith([], ['Delete'])).toMatchObject({ verdict: 'allow', rules: ['target.unlabeled', 'target.unlabeled_near_sensitive'] });
     expect(tapWith([], ['Wallet']).rules).toContain('target.unlabeled_near_sensitive');
     expect(tapWith([], ['Notes'])).toMatchObject({ verdict: 'allow', rules: ['target.unlabeled'] });
   });

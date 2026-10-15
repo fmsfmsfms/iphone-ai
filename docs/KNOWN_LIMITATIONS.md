@@ -65,9 +65,13 @@
 - After an approval the screen is checked again. Text that changes on its own away from where
   it was (e.g. "Arriving in 12 min" ticking to "11 min", or new captions under video) cancels an
   approved tap or key press, and the AI asks again. This fails safe by design.
-- In Supervised mode, pressing Return or tapping an unlabeled/"Send"-like control after
-  typing requires approval — even for harmless searches — because the same gesture sends
-  messages and submits forms.
+- In Assisted mode, the card for pressing Return or tapping an unlabeled/"Send"-like control
+  after typing warns that it may send — even for harmless searches — because the same gesture
+  sends messages and submits forms.
+- AI Mode never asks for approval: sending, deleting, paying, acting on an auth or payment
+  screen, or inside a blocked app that is already open all run without a card. Only denials
+  (blocked-app launches/taps/typing, deny rules, typing on password/code screens, actions not
+  in the allowed list) and STOP still stop it.
 - Keyword rules are English/Arabic substring/word matches on OCR text; they can produce
   false positives (extra approvals) and false negatives (unlabeled icons).
 - Blocked-app detection covers launches, taps on labels containing the app name, and

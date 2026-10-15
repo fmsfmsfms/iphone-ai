@@ -70,7 +70,7 @@ function commentary(count: number, delayMs = 0): ScriptedTurn[] {
 }
 
 test('one scroll area; an approval after turns of commentary stays in view and the cue leads back to it', async ({ page }) => {
-  await setControl(page, { mode: 'supervised' });
+  await setControl(page, { mode: 'assisted' });
   const conversationId = await openPanel(page);
   await scriptModel([
     ...commentary(6),
@@ -114,7 +114,7 @@ test('one scroll area; an approval after turns of commentary stays in view and t
 });
 
 test('an approval that arrives while the user reads further up is brought into view', async ({ page }) => {
-  await setControl(page, { mode: 'supervised' });
+  await setControl(page, { mode: 'assisted' });
   const conversationId = await openPanel(page);
   await scriptModel([
     ...commentary(4),

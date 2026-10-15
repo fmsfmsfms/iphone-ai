@@ -2,8 +2,9 @@
 // tap target count as known: not for the commit-after-typing approval, and not
 // to hide sensitive text in the same row. Replays the real-device incident of
 // 2026-10-15 (Jahez search: an approved tap refused by the re-check, then the
-// same tap re-issued on a field now read as "a" ran without approval). Fake
-// device driving the real AgentToolkit; no Mirroir, no phone.
+// same tap re-issued on a field now read as "a" ran without approval). Runs in
+// Assisted mode, where the approval card names what the policy flagged (AI Mode
+// never shows one). Fake device driving the real AgentToolkit; no Mirroir, no phone.
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { ActionResult, DeviceAction, ScreenDescription, ScreenElement } from '@iphone-ai/shared';
@@ -17,7 +18,7 @@ import { isReadableLabel } from '../../src/policy/target.js';
 import { createCoreContext, type CoreContext } from '../helpers/context.js';
 
 let ctx: CoreContext;
-beforeEach(() => { ctx = createCoreContext({ settings: { permissions: { controlMode: 'supervised' }, ai: { settleDelayMs: 100 } } }); });
+beforeEach(() => { ctx = createCoreContext({ settings: { permissions: { controlMode: 'assisted' }, ai: { settleDelayMs: 100 } } }); });
 afterEach(async () => { await ctx.cleanup(); });
 
 type E = [string, number, number];
@@ -45,7 +46,7 @@ function kitWith(screens: (() => ScreenDescription)[], approve = true) {
   const approvals = new ApprovalBroker(ctx.db, ctx.hub, ctx.activity);
   const kit = new AgentToolkit(
     { device, approvals, settings: ctx.settings, activity: ctx.activity, screenshots: new ScreenshotStore(ctx.db, ctx.paths, ctx.settings) },
-    { taskId: 'task_1', leaseId: 'lease_1', signal: new AbortController().signal, vision: false, maxActions: 10, mode: 'supervised',
+    { taskId: 'task_1', leaseId: 'lease_1', signal: new AbortController().signal, vision: false, maxActions: 10, mode: 'assisted',
       addStep: () => undefined, setActivity: () => undefined, setAwaitingApproval: () => undefined, waitIfPaused: async () => undefined, onActionsUsed: () => undefined, uncommittedTyping: () => false },
   );
   const asked: string[][] = [];
@@ -64,12 +65,13 @@ function kitWith(screens: (() => ScreenDescription)[], approve = true) {
 }
 
 describe('the real-device incident', () => {
-  it('asks again for the same coordinate tap after a refused re-check when the target now reads "a"', async () => {
+  it('flags the same coordinate tap as a possible send after a refused re-check when the target now reads "a"', async () => {
     const s0 = screen([['WOL:Z1', 71, 63], ['asaayp @', 65, 104], ['cheese - atü d,g o', 177, 301]]);
     const sTyped = screen([['WOL:Z1', 71, 63], ['asaayp @', 65, 104], ['cheese - atü d,g o', 177, 301], ['x', 10, 700]]);
     const sRecheck = screen([['12:11', 72, 63], ['a', 282, 104], ['• cheese', 66, 104], ['cheese - aü dg o', 177, 301]]);
     const sAfter = screen([['12:11 >', 67, 61], ["McDonald's KSA", 128, 202]]);
-    const h = kitWith([s0, sTyped, sRecheck, sRecheck, sAfter]);
+    // (The approved type_text re-checks s0 before it runs.)
+    const h = kitWith([s0, s0, sTyped, sRecheck, sRecheck, sAfter]);
     await h.kit.observe();
     await h.call('type_text', { text: 'cheese' });
     expect(h.performed.map((a) => a.kind)).toEqual(['type_text']);
@@ -79,23 +81,25 @@ describe('the real-device incident', () => {
     const before = h.asked.length;
     await h.call('tap', { x: 322, y: 104 });
     expect(h.asked.length).toBe(before + 1);
+    expect(h.asked.at(-1)!.join(' ')).toMatch(/may send or submit/);
   });
 
-  it('asks again when the re-issued tap names the "a" element instead', async () => {
+  it('flags it too when the re-issued tap names the "a" element instead', async () => {
     const s0 = screen([['asaayp @', 65, 104], ['cheese', 177, 301]]);
     const sRecheck = screen([['a', 282, 104], ['• cheese', 66, 104], ['cheese', 177, 301]]);
-    const h = kitWith([s0, s0, sRecheck, sRecheck, sRecheck]);
+    const h = kitWith([s0, s0, s0, sRecheck, sRecheck, sRecheck]);
     await h.kit.observe();
     await h.call('type_text', { text: 'cheese' });
     await h.call('tap', { x: 322, y: 104 });
     const before = h.asked.length;
     await h.call('tap', { element_id: 'e1' });
     expect(h.asked.length).toBe(before + 1);
+    expect(h.asked.at(-1)!.join(' ')).toMatch(/may send or submit/);
   });
 });
 
 describe('a glyph at the tap point does not hide its row', () => {
-  it('asks before a coordinate tap on ">" in the "Delete Account" row, as without the glyph', async () => {
+  it('flags a coordinate tap on ">" in the "Delete Account" row, as without the glyph', async () => {
     for (const withGlyph of [false, true]) {
       const els: E[] = [['Settings', 178, 100], ['Delete Account', 100, 300]];
       if (withGlyph) els.push(['>', 330, 300]);
@@ -103,6 +107,7 @@ describe('a glyph at the tap point does not hide its row', () => {
       await h.kit.observe();
       await h.call('tap', { x: 330, y: 300 });
       expect(h.asked.length, `glyph: ${withGlyph}`).toBe(1);
+      expect(h.asked[0]!.join(' '), `glyph: ${withGlyph}`).toMatch(/Delete Account/);
       expect(h.performed, `glyph: ${withGlyph}`).toEqual([]);
     }
   });
@@ -116,6 +121,8 @@ describe('a glyph at the tap point does not hide its row', () => {
     await icon.call('tap', { element_id: 'e2' });
     expect(glyph.asked.length).toBe(1);
     expect(icon.asked.length).toBe(1);
+    expect(glyph.asked[0]!.join(' ')).toMatch(/Delete Account/);
+    expect(icon.asked[0]!.join(' ')).toMatch(/Delete Account/);
     expect(glyph.performed).toEqual([]);
     expect(icon.performed).toEqual([]);
   });

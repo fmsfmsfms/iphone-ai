@@ -37,10 +37,10 @@ registerMessages('automations', {
     'source.recorded': 'Recorded',
     'source.imported': 'Imported',
 
-    'mode.title': 'Runs need Assisted or Supervised mode',
-    'mode.body': 'In Observe Only, automations can’t touch your iPhone. Choose Assisted to approve each action yourself, or Supervised to let the run act on its own — sensitive actions still ask first.',
+    'mode.title': 'Runs need Assisted or AI Mode',
+    'mode.body': 'In Observe Only, automations can’t touch your iPhone. Choose Assisted to approve each action yourself, or AI Mode to let the run act on its own without asking.',
     'mode.assisted': 'Switch to Assisted',
-    'mode.supervised': 'Switch to Supervised',
+    'mode.supervised': 'Switch to AI Mode',
 
     // Editor
     'editor.details': 'Details',
@@ -287,7 +287,7 @@ registerMessages('automations', {
     'run.reason.offline': 'Reconnecting to iPhone AI…',
     'run.reason.viewOnly': 'This session is view-only.',
     'run.reason.stopLatched': 'The emergency stop is engaged. Re-arm control first.',
-    'run.reason.observe': 'Switch to Assisted or Supervised mode to run workflows.',
+    'run.reason.observe': 'Switch to Assisted or AI Mode to run workflows.',
     'run.reason.unsaved': 'Save your changes first — runs use the saved workflow.',
     'run.reason.noSteps': 'Add at least one step and save.',
     'run.reason.alreadyRunning': 'This workflow is already running.',
@@ -423,10 +423,10 @@ registerMessages('automations', {
     'source.recorded': 'مسجّل',
     'source.imported': 'مستورد',
 
-    'mode.title': 'التشغيل يتطلب الوضع المساعد أو الإشرافي',
-    'mode.body': 'في وضع المراقبة فقط لا يمكن للأتمتة لمس جهاز iPhone. اختر الوضع المساعد لتوافق على كل إجراء بنفسك، أو الوضع الإشرافي ليعمل التشغيل بمفرده — مع بقاء طلب الإذن قبل الإجراءات الحساسة.',
+    'mode.title': 'التشغيل يتطلب الوضع المساعد أو وضع الذكاء الاصطناعي',
+    'mode.body': 'في وضع المراقبة فقط لا يمكن للأتمتة لمس جهاز iPhone. اختر الوضع المساعد لتوافق على كل إجراء بنفسك، أو وضع الذكاء الاصطناعي ليعمل التشغيل بمفرده دون أن يسألك.',
     'mode.assisted': 'التبديل إلى الوضع المساعد',
-    'mode.supervised': 'التبديل إلى الوضع الإشرافي',
+    'mode.supervised': 'التبديل إلى وضع الذكاء الاصطناعي',
 
     'editor.details': 'التفاصيل',
     'editor.name': 'الاسم',
@@ -675,7 +675,7 @@ registerMessages('automations', {
     'run.reason.offline': 'جارٍ إعادة الاتصال بـ iPhone AI…',
     'run.reason.viewOnly': 'هذه الجلسة للعرض فقط.',
     'run.reason.stopLatched': 'زر الإيقاف الطارئ مفعّل. أعد تفعيل التحكم أولًا.',
-    'run.reason.observe': 'انتقل إلى الوضع المساعد أو الإشرافي لتشغيل سير العمل.',
+    'run.reason.observe': 'انتقل إلى الوضع المساعد أو وضع الذكاء الاصطناعي لتشغيل سير العمل.',
     'run.reason.unsaved': 'احفظ تغييراتك أولًا — التشغيل يستخدم النسخة المحفوظة.',
     'run.reason.noSteps': 'أضف خطوة واحدة على الأقل واحفظ.',
     'run.reason.alreadyRunning': 'سير العمل هذا قيد التشغيل بالفعل.',

@@ -47,14 +47,15 @@ function screen(elements: E[], icons: [number, number][] = []): () => ScreenDesc
 
 /**
  * Observes `screens[0]`, calls the tool, approves the card if one is shown, and
- * serves `screens[1]` (and later) to the re-check and after.
+ * serves `screens[1]` (and later) to the re-check and after. Runs in Assisted
+ * mode unless `mode` says otherwise (AI Mode never shows a card).
  */
 async function approveThenChange(
   call: { name: string; args: Record<string, unknown> },
   screens: (() => ScreenDescription)[],
   opts: { typing?: boolean; mode?: 'supervised' | 'assisted' } = {},
 ) {
-  ctx.settings.update({ permissions: { controlMode: opts.mode ?? 'supervised' } });
+  ctx.settings.update({ permissions: { controlMode: opts.mode ?? 'assisted' } });
   const performed: DeviceAction[] = [];
   let describes = 0;
   const device = {
@@ -76,7 +77,7 @@ async function approveThenChange(
       signal: new AbortController().signal,
       vision: false,
       maxActions: 5,
-      mode: opts.mode ?? 'supervised',
+      mode: opts.mode ?? 'assisted',
       addStep: () => undefined,
       setActivity: () => undefined,
       setAwaitingApproval: () => undefined,
@@ -132,10 +133,10 @@ describe('OCR noise alone does not cost a second approval', () => {
   });
 
   it('runs an approved labelled tap when a relative time or a like count ticked', async () => {
-    // "Share" and "Post" are sensitive (messaging), so Supervised asks first.
+    // "Share" and "Post" are sensitive (messaging): the card says so.
     const feed = (time: string): E[] => [...STATUS, ['ahmed_k', 90, 120], [time, 320, 120], ['Big Mac day', 150, 500], ['Share', 300, 700]];
     const share = await approveThenChange({ name: 'tap', args: { element_id: 'e7' } }, [screen(feed('5m')), screen(feed('6m'))]);
-    expect(share.asked).not.toBeNull();
+    expect(share.asked?.reasons.join(' ')).toMatch(/Share/);
     expect(share.performed.map((a) => a.kind)).toEqual(['tap']);
     const comments = (likes: string): E[] => [...STATUS, [likes, 324, 468], ['Add comment...', 150, 700], ['Post', 320, 700]];
     const post = await approveThenChange({ name: 'tap', args: { element_id: 'e6' } }, [screen(comments('• 9.5K')), screen(comments('• 9.6K'))]);
@@ -270,25 +271,25 @@ describe('a changed screen refuses the approved action', () => {
 });
 
 describe('unlabeled icons are checked by the labels around them', () => {
-  it('Supervised: tapping the chevron of a "Delete Account" row by element id asks for approval, like a coordinate tap there', async () => {
+  it('tapping the chevron of a "Delete Account" row by element id names that row on the card, like a coordinate tap there', async () => {
     const s = screen([...STATUS, ['Apple Account', 178, 120], ['Delete Account', 110, 400]], [[330, 400]]);
     const byId = await approveThenChange({ name: 'tap', args: { element_id: 'e6' } }, [s]);
     expect(byId.asked?.reasons.join(' ')).toMatch(/Delete Account/);
     const byPoint = await approveThenChange({ name: 'tap', args: { x: 330, y: 400 } }, [s]);
-    expect(byPoint.asked).not.toBeNull();
+    expect(byPoint.asked?.reasons.join(' ')).toMatch(/Delete Account/);
   });
 
-  it('Supervised: an icon next to a blocked app is refused outright', async () => {
+  it('AI Mode: an icon next to a blocked app is refused outright', async () => {
     const s = screen([...STATUS, ['Wallet', 61, 558]], [[61, 520]]);
-    const r = await approveThenChange({ name: 'tap', args: { element_id: 'e5' } }, [s]);
+    const r = await approveThenChange({ name: 'tap', args: { element_id: 'e5' } }, [s], { mode: 'supervised' });
     expect(r.asked).toBeNull();
     expect(r.performed).toEqual([]);
     expect(r.text).toMatch(/BLOCKED/);
   });
 
-  it('Supervised: a harmless icon still runs without approval', async () => {
+  it('AI Mode: a harmless icon runs without approval', async () => {
     const s = screen([...STATUS, ['Settings', 61, 558]], [[61, 520]]);
-    const r = await approveThenChange({ name: 'tap', args: { element_id: 'e5' } }, [s]);
+    const r = await approveThenChange({ name: 'tap', args: { element_id: 'e5' } }, [s], { mode: 'supervised' });
     expect(r.asked).toBeNull();
     expect(r.performed.map((a) => a.kind)).toEqual(['tap']);
   });
@@ -303,8 +304,8 @@ describe('unlabeled icons are checked by the labels around them', () => {
   });
 });
 
-describe('payment buttons ask for approval in Supervised mode', () => {
-  it('"Pay SAR 49.00", "Order now", "اطلب الآن" and "Payment method" need approval; "Payload size" does not', async () => {
+describe('payment buttons are named on the approval card', () => {
+  it('"Pay SAR 49.00", "Order now", "اطلب الآن" and "Payment method" are flagged; "Payload size" is not', async () => {
     for (const label of ['Pay SAR 49.00', 'Order now', 'اطلب الآن', 'Payment method']) {
       const s = screen([...STATUS, ...ORDER, [label, 178, 700]]);
       const r = await approveThenChange({ name: 'tap', args: { element_id: 'e8' } }, [s]);
@@ -312,6 +313,31 @@ describe('payment buttons ask for approval in Supervised mode', () => {
     }
     const harmless = screen([...STATUS, ...ORDER, ['Payload size', 178, 700]]);
     const r = await approveThenChange({ name: 'tap', args: { element_id: 'e8' } }, [harmless]);
+    expect(r.asked?.reasons.join(' ')).not.toMatch(/Payments/);
+  });
+});
+
+describe('AI Mode never asks for approval', () => {
+  it('taps "Pay SAR 49.00", the "Delete Account" chevron and an unlabeled arrow after typing without a card', async () => {
+    const pay = screen([...STATUS, ...ORDER, ['Pay SAR 49.00', 178, 700]]);
+    const payTap = await approveThenChange({ name: 'tap', args: { element_id: 'e8' } }, [pay], { mode: 'supervised' });
+    expect(payTap.asked).toBeNull();
+    expect(payTap.performed.map((a) => a.kind)).toEqual(['tap']);
+    const account = screen([...STATUS, ['Apple Account', 178, 120], ['Delete Account', 110, 400]], [[330, 400]]);
+    const chevron = await approveThenChange({ name: 'tap', args: { element_id: 'e6' } }, [account], { mode: 'supervised' });
+    expect(chevron.asked).toBeNull();
+    expect(chevron.performed.map((a) => a.kind)).toEqual(['tap']);
+    const arrow = await approveThenChange({ name: 'tap', args: { x: 322, y: 200 } }, [screen([...STATUS, ...ORDER])], { mode: 'supervised', typing: true });
+    expect(arrow.asked).toBeNull();
+    expect(arrow.performed.map((a) => a.kind)).toEqual(['tap']);
+  });
+
+  it('presses Return after typing without a card', async () => {
+    const r = await approveThenChange({ name: 'press_key', args: { key: 'return' } }, [screen([...STATUS, ...ORDER, ['SAR 49.00', 280, 600]])], {
+      mode: 'supervised',
+      typing: true,
+    });
     expect(r.asked).toBeNull();
+    expect(r.performed.map((a) => a.kind)).toEqual(['press_key']);
   });
 });

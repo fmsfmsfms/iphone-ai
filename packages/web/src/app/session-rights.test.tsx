@@ -115,15 +115,15 @@ describe('actions reserved for the Mac', () => {
     render(<ControlModeSelector />);
     await userEvent.click(screen.getByRole('button', { name: /Control mode:/ }));
     expect(await screen.findByRole('menuitemradio', { name: /Observe Only/ })).not.toBeDisabled();
-    expect(screen.getByRole('menuitemradio', { name: /Supervised/ })).toBeDisabled();
-    expect(screen.getByText('Assisted and Supervised can only be turned on from the Mac.')).toBeInTheDocument();
+    expect(screen.getByRole('menuitemradio', { name: /AI Mode/ })).toBeDisabled();
+    expect(screen.getByText('Assisted and AI Mode can only be turned on from the Mac.')).toBeInTheDocument();
   });
 
   it('a remote device never gets the escalation dialog', async () => {
     bootAs(REMOTE_CONTROL);
     const fetchMock = routeFetch({});
     render(<ControlModeSelector variant="inline" />);
-    expect(screen.getByRole('menuitemradio', { name: /Supervised/ })).toBeDisabled();
+    expect(screen.getByRole('menuitemradio', { name: /AI Mode/ })).toBeDisabled();
     expect(screen.getByRole('menuitemradio', { name: /Assisted/ })).toBeDisabled();
     expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
     expect(fetchMock).not.toHaveBeenCalled();

@@ -45,7 +45,7 @@ const POLL_MS = 500;
 export const CONTROL_MODE_LABELS: Record<ControlMode, string> = {
   observe: 'Observe Only',
   assisted: 'Assisted Control',
-  supervised: 'Supervised Automation',
+  supervised: 'AI Mode',
 };
 
 const pendingRestarts = new WeakMap<object, Promise<void>>();

@@ -1,4 +1,4 @@
-// Explains that workflow runs need Assisted or Supervised mode, with buttons
+// Explains that workflow runs need Assisted or AI Mode, with buttons
 // that go through the standard mode-change confirmation.
 
 import { Eye, Hand, Sparkles } from '@gravity-ui/icons';

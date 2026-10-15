@@ -90,7 +90,7 @@ bar or the Assistant page — no restart needed. Text-only models can use a sepa
 |---|---|
 | **Observe Only** (default) | Look and describe. No input. |
 | **Assisted Control** | Proposes each action; you approve or reject every one. |
-| **Supervised Automation** | Acts within the task; sensitive actions still need approval; blocked actions never run. |
+| **AI Mode** | Acts on its own within the task and never asks for approval; blocked actions still never run. |
 
 **STOP AI CONTROL** (red button, `⌘.`, or `Esc Esc`) stops everything immediately. See
 [Security](SECURITY.md) for exactly what it does.
@@ -102,7 +102,7 @@ Automations → *New workflow* or *Suggest with AI* or *Record*:
 - *Record* captures what you do in Live Control and converts taps on labelled elements
   into text-based steps.
 - Add **checkpoints** to require your approval mid-run; AI steps can handle variable screens.
-- Runs need Assisted or Supervised mode. Pause, resume, stop, and retry (from the failed
+- Runs need Assisted Control or AI Mode. Pause, resume, stop, and retry (from the failed
   step) are available; every run is kept in the history with per-step results.
 - *Export SKILL.md* writes the workflow in Mirroir's skill format into iPhone AI's Mirroir
   workspace.

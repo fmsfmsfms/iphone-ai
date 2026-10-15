@@ -1,5 +1,5 @@
 // 8. Automations: build a workflow in the editor (Open app "Settings" → Tap
-// text "Wi-Fi"), switch to Supervised from the run panel, run it, and see
+// text "Wi-Fi"), switch to AI Mode from the run panel, run it, and see
 // per-step results and the run in the history.
 
 import { expect, test } from '@playwright/test';
@@ -11,7 +11,7 @@ test.beforeEach(async ({ page }) => {
   await resetState(page);
 });
 
-test('a workflow built in the editor runs step by step in Supervised mode', async ({ page }) => {
+test('a workflow built in the editor runs step by step in AI Mode', async ({ page }) => {
   const name = `E2E Wi-Fi ${Date.now()}`;
   await openRoute(page, '#/automations');
   await expect(page.getByRole('heading', { name: 'Automations', level: 1 })).toBeVisible();
@@ -39,14 +39,14 @@ test('a workflow built in the editor runs step by step in Supervised mode', asyn
   await expect(page).toHaveURL(/#\/automations\/(?!new)[^/]+$/);
   await expect(page.getByRole('heading', { name, level: 1 })).toBeVisible();
 
-  // Runs need Assisted or Supervised: switch from the run panel (with confirmation).
+  // Runs need Assisted or AI Mode: switch from the run panel (with confirmation).
   const run = page.getByRole('button', { name: 'Run workflow' });
-  await expect(page.getByText('Runs need Assisted or Supervised mode')).toBeVisible();
+  await expect(page.getByText('Runs need Assisted or AI Mode')).toBeVisible();
   await expect(run).toBeDisabled();
   const starts = mockStarts();
-  await page.getByRole('button', { name: 'Switch to Supervised' }).click();
-  const dialog = page.getByRole('alertdialog', { name: 'Switch to Supervised?' });
-  await dialog.getByRole('button', { name: 'Switch to Supervised' }).click();
+  await page.getByRole('button', { name: 'Switch to AI Mode' }).click();
+  const dialog = page.getByRole('alertdialog', { name: 'Switch to AI Mode?' });
+  await dialog.getByRole('button', { name: 'Switch to AI Mode' }).click();
   await expect(dialog).toBeHidden();
   await waitForRestartAfter(page, starts);
   expect((await getSettings(page)).permissions.controlMode).toBe('supervised');

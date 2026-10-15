@@ -109,7 +109,7 @@ export function registerControlRoutes(app: FastifyInstance, deps: RouteDeps): vo
     const session = requireControl(request, auth);
     const { mode } = parseBody(modeSchema, request.body);
     if (session.kind === 'remote' && mode !== 'observe') {
-      throw new HttpError(403, 'local_only', 'Assisted Control and Supervised Automation can only be turned on from the Mac.');
+      throw new HttpError(403, 'local_only', 'Assisted Control and AI Mode can only be turned on from the Mac.');
     }
     const previous = ctx.settings.get();
     const next = applySettingsPatch(ctx, { permissions: { controlMode: mode } });

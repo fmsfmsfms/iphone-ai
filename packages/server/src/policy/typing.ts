@@ -7,7 +7,8 @@
 //  • typing sets it (unless the text itself ends with a line break);
 //  • going Home or opening an app clears it;
 //  • the person's own Return or tap clears it (they committed it themselves);
-//  • for the AI and workflows only an APPROVED commit clears it.
+//  • for the AI and workflows only an AUTHORISED commit clears it (approved, or
+//    allowed outright in AI Mode).
 
 import type { Actor, DeviceAction, PolicyDecision } from '@iphone-ai/shared';
 
@@ -31,6 +32,6 @@ export function nextUncommittedTyping(current: boolean, event: TypingActionEvent
   const commitLike = POINTER_KINDS.has(action.kind) || (action.kind === 'press_key' && COMMIT_KEYS.has(action.key.toLowerCase()));
   if (!commitLike) return current;
   if (ctx.actor === 'user' || ctx.actor === 'remote-user') return false;
-  if (ctx.approvalId && ctx.decision.rules.includes('commit.after_typing')) return false;
+  if ((ctx.approvalId || ctx.decision.verdict === 'allow') && ctx.decision.rules.includes('commit.after_typing')) return false;
   return current;
 }

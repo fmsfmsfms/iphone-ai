@@ -707,6 +707,8 @@ export class AgentToolkit {
     // Text ending in a line break was committed by that Return (it needed approval).
     if (action.kind === 'type_text' && result.ok) this.pendingTypedText = !/[\r\n]$/.test(action.text);
     if (action.kind === 'press_home' || action.kind === 'launch_app') this.pendingTypedText = false;
+    // AI Mode allows a commit outright: it sent what was typed.
+    if (result.ok && decision.verdict === 'allow' && decision.rules.includes('commit.after_typing')) this.pendingTypedText = false;
 
     // Verify: settle, then look again.
     await abortableSleep(settings.ai.settleDelayMs, this.task.signal);

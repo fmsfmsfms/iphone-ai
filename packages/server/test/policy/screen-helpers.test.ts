@@ -88,4 +88,10 @@ describe('nextUncommittedTyping', () => {
     // A failed commit leaves the draft in place.
     expect(nextUncommittedTyping(true, ev({ kind: 'press_home' }, 'ai', { ok: false }))).toBe(true);
   });
+
+  it('is cleared by a commit AI Mode allowed without approval', () => {
+    const allowedCommit: PolicyDecision = { verdict: 'allow', risk: 'high', reasons: [], rules: ['commit.after_typing'] };
+    expect(nextUncommittedTyping(true, ev({ kind: 'tap', x: 378, y: 800 }, 'ai', { decision: allowedCommit }))).toBe(false);
+    expect(nextUncommittedTyping(true, ev({ kind: 'press_key', key: 'return' }, 'workflow', { decision: allowedCommit }))).toBe(false);
+  });
 });
