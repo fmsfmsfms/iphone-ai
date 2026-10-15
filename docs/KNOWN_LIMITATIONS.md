@@ -7,15 +7,22 @@
   15 at most). It needs iPhone AI's Screen Recording grant. Without it, or if the helper
   fails, the viewer falls back to polling Mirroir's `screenshot` tool (≈2 fps, PNG over
   MCP). The viewer shows which source is live and the measured FPS/latency.
-- **A swipe takes about 2.4 s.** Paging feeds (TikTok, Reels, Shorts) needs Mirroir's
-  `swipe`, a trackpad-style scroll whose momentum tail is what makes iOS snap to the next
-  item; the call returns after the tail (measured 2.4 s per swipe on the real iPhone). A drag
-  in the viewer is replayed after you release it, as a quick 0.3 s flick in your direction. Mirroir's `drag` is faster but arrives as a
-  pointer click-drag, which iOS scroll views ignore (verified on the real iPhone). The AI
-  can page several items in one step (`times`) to save observations.
-- **Every input action costs ~0.6 s of window activation.** Mirroir brings iPhone
-  Mirroring to the front and waits for macOS to settle before each tap or gesture. This
-  is inside Mirroir and is not changed by iPhone AI.
+- **A page swipe takes about 1.6 s.** Swipes go through Mirroir's `swipe`, a trackpad-style
+  scroll. A fast one (≥ 500 pt/s) gets a ~1.4 s momentum tail that Mirroir waits out
+  (≈2.3 s per swipe) and that can leave TikTok stuck half-way between two videos, so iPhone
+  AI paces every swipe at 460 pt/s: the feed snaps at the lift and has settled when Mirroir
+  returns. Paging needs the swipe to travel past about half a page (TikTok snapped back at
+  400 pt and paged from 450 pt of 782), so paging swipes travel 70% of the screen. A swipe
+  can still snap back when the next item has not loaded yet (seen once on the real iPhone).
+  A drag in the viewer is replayed after you release it. Mirroir's `drag` arrives as a
+  pointer click-drag, which iOS scroll views ignore (verified on the real iPhone). The AI can
+  page several items in one step (`times`) to save observations.
+- **Input from the viewer costs ~1.2 s of window activation.** Mirroir brings iPhone
+  Mirroring to the front before each tap or gesture (AppleScript, then three 300 ms settle
+  waits for a swipe); a swipe measured 3.5 s when iPhone Mirroring was in the background and
+  2.3 s when it was already in front. Clicking in iPhone AI's viewer puts iPhone AI in front,
+  so manual input usually pays it; consecutive AI actions do not. This is inside Mirroir and
+  is not changed by iPhone AI.
 - **Focus stealing.** Every input action makes iPhone Mirroring the frontmost app
   (macOS delivers synthetic input only to the frontmost app). iPhone AI can re-focus
   itself after manual actions, but focus still moves briefly. Avoid typing elsewhere on

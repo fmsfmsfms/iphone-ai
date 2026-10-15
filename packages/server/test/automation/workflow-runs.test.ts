@@ -409,10 +409,10 @@ describe('workflow runs', () => {
     ]);
     const run = await runToEnd(id);
     expect(run.status).toBe('succeeded');
-    // Mirroir drag (a real touch flick), not its scroll-wheel swipe with a momentum tail.
+    // The AI's paced swipe (no momentum tail); without a distance a step pages (long).
     expect(h.device.performed.map((p) => p.action)).toEqual([
-      { kind: 'swipe', fromX: 205, fromY: 629, toX: 205, toY: 269, durationMs: 300 },
-      { kind: 'swipe', fromX: 318, fromY: 449, toX: 92, toY: 449, durationMs: 300 },
+      { kind: 'swipe', fromX: 205, fromY: 763, toX: 205, toY: 135, durationMs: 1366 },
+      { kind: 'swipe', fromX: 349, fromY: 449, toX: 62, toY: 449, durationMs: 624 },
     ]);
   });
 

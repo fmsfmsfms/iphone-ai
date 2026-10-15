@@ -6,6 +6,7 @@ export * from './device.js';
 export * from './events.js';
 export * from './schemas.js';
 export * from './settings.js';
+export * from './swipe.js';
 export * from './workflow.js';
 export * from './version.js';
 

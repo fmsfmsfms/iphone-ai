@@ -1,8 +1,9 @@
 // Pointer and keyboard layer over the phone picture that turns input into
 // device actions: a click is a tap (or long-press / double-tap, per the mode);
-// a drag is a Mirroir swipe with the user's own start/end points and duration
-// (a click-drag in Long press mode; lib/gestures.ts). While the screen is
-// focused, the arrow keys send centred swipes (↑ = next item).
+// a drag is a Mirroir swipe with the user's own start/end points, and a flick
+// (released while moving) pages (a click-drag in Long press mode;
+// lib/gestures.ts). While the screen is focused, the arrow keys page like a
+// flick (↑ = next item).
 
 import type { DeviceAction, FrameMeta } from '@iphone-ai/shared';
 import {
@@ -16,7 +17,15 @@ import {
 } from 'react';
 
 import { distance, pointerToWindowPoint, windowPointToElement, type WindowPoint } from '../../lib/geometry';
-import { flickAction, flickDirectionForKey, pointerGestureAction, type TouchMode } from '../../lib/gestures';
+import {
+  flickAction,
+  flickDirectionForKey,
+  pointerGestureAction,
+  releaseVelocity,
+  RELEASE_WINDOW_MS,
+  type PointerSample,
+  type TouchMode,
+} from '../../lib/gestures';
 import { useI18n } from '../../lib/i18n';
 import { sendManualAction } from './phone-actions';
 
@@ -40,6 +49,8 @@ interface Gesture {
   startPoint: WindowPoint;
   startTime: number;
   moved: boolean;
+  /** Recent pointer positions (window points) for the release speed. */
+  samples: PointerSample[];
 }
 
 interface Ripple {
@@ -142,6 +153,7 @@ export function TouchSurface({ imageRef, meta, natural, mode, keyboardFlicks = f
       startPoint: point,
       startTime: performance.now(),
       moved: false,
+      samples: [{ point, t: performance.now() }],
     };
   };
 
@@ -149,6 +161,13 @@ export function TouchSurface({ imageRef, meta, natural, mode, keyboardFlicks = f
     const g = gesture.current;
     if (!g || g.pointerId !== e.pointerId) return;
     g.lastClient = { x: e.clientX, y: e.clientY };
+    const point = map(e.clientX, e.clientY, true);
+    if (point) {
+      const now = performance.now();
+      g.samples.push({ point, t: now });
+      // Keep one sample older than the release window as the reference.
+      while (g.samples.length > 2 && g.samples[1]!.t <= now - RELEASE_WINDOW_MS) g.samples.shift();
+    }
     if (!g.moved && distance(g.startClient, g.lastClient) > 8) g.moved = true;
     if (g.moved) setTrail({ from: toLocal(g.startClient.x, g.startClient.y), to: toLocal(e.clientX, e.clientY) });
   };
@@ -162,17 +181,33 @@ export function TouchSurface({ imageRef, meta, natural, mode, keyboardFlicks = f
     if (cancelled) return;
 
     const travelPx = distance(g.startClient, { x: e.clientX, y: e.clientY });
+    const now = performance.now();
+    const to = map(e.clientX, e.clientY, true);
     const action = pointerGestureAction({
       mode,
       from: g.startPoint,
-      to: map(e.clientX, e.clientY, true),
+      to,
       travelPx,
-      elapsedMs: performance.now() - g.startTime,
+      elapsedMs: now - g.startTime,
+      release: to ? releaseVelocity(g.samples, { point: to, t: now }) : null,
+      window: geometry ? { width: geometry.widthPt, height: geometry.heightPt } : null,
     });
     if (!action) return;
-    if (action.kind === 'swipe' || action.kind === 'drag') addRipple(toLocal(e.clientX, e.clientY), false);
+    if (action.kind === 'swipe') showSwipe(action);
+    else if (action.kind === 'drag') addRipple(toLocal(e.clientX, e.clientY), false);
     else addRipple(toLocal(g.startClient.x, g.startClient.y), action.kind === 'long_press');
     void send(action);
+  };
+
+  /** Briefly draws the swipe actually sent (a flick pages with a centred swipe). */
+  const showSwipe = (action: Extract<DeviceAction, { kind: 'swipe' }>) => {
+    const from = toSurface({ x: action.fromX, y: action.fromY });
+    const to = toSurface({ x: action.toX, y: action.toY });
+    if (!from || !to) return;
+    setFlick({ from, to });
+    addRipple(to, false);
+    if (flickTimer.current) clearTimeout(flickTimer.current);
+    flickTimer.current = setTimeout(() => setFlick(null), FLICK_TRAIL_MS);
   };
 
   const onKeyDown = (e: ReactKeyboardEvent<HTMLDivElement>) => {
@@ -184,14 +219,7 @@ export function TouchSurface({ imageRef, meta, natural, mode, keyboardFlicks = f
     if (e.repeat || busy.current || gesture.current) return;
     const action = flickAction(direction, geometry ? { width: geometry.widthPt, height: geometry.heightPt } : null);
     if (!action || action.kind !== 'swipe') return;
-    const from = toSurface({ x: action.fromX, y: action.fromY });
-    const to = toSurface({ x: action.toX, y: action.toY });
-    if (from && to) {
-      setFlick({ from, to });
-      addRipple(to, false);
-      if (flickTimer.current) clearTimeout(flickTimer.current);
-      flickTimer.current = setTimeout(() => setFlick(null), FLICK_TRAIL_MS);
-    }
+    showSwipe(action);
     void send(action);
   };
 

@@ -10,12 +10,12 @@ Three kinds of evidence are kept strictly apart:
 
 ## Automated suites
 
-Last full run: 2026-10-15, v0.5.2, with the official Node 22 toolchain (`source scripts/env.sh`).
+Last full run: 2026-10-15, v0.6.0, with the official Node 22 toolchain (`source scripts/env.sh`).
 
 | Suite | Command | Result |
 |---|---|---|
-| Backend unit + integration (MOCK) | `pnpm --filter @iphone-ai/server test` | 576 passed (43 files, incl. the real capture helper's --test-pattern against the backend parser, and approval re-checks replayed from recorded real-device screens) |
-| UI unit (jsdom) | `pnpm --filter @iphone-ai/web test` | 322 passed (33 files) |
+| Backend unit + integration (MOCK) | `pnpm --filter @iphone-ai/server test` | 577 passed (43 files, incl. the real capture helper's --test-pattern against the backend parser, and approval re-checks replayed from recorded real-device screens) |
+| UI unit (jsdom) | `pnpm --filter @iphone-ai/web test` | 329 passed (33 files) |
 | Browser E2E (Playwright, MOCK backend + scripted model) | `pnpm test:e2e` | 24 passed (incl. the Live Control assistant panel: one scroller, approvals in view) |
 | Tauri shell (Rust) | `cd src-tauri && cargo test` | 21 passed; clippy and rustfmt clean |
 | Real-device read-only | `pnpm test:device` (needs a connected iPhone) | not run; see device section |
@@ -143,6 +143,30 @@ The approval re-check of v0.5.0 has not run on the device yet.
 - Two runs ended early because the iPhone unlocked mid-session (Face ID when picked up or looked
   at): iPhone Mirroring logs "deviceUnlockedDuringSession". Resuming also asked for Mac
   authentication (Touch ID / password), which the user must do.
+
+**v0.5.2 TikTok run and swipe experiment on the real iPhone (2026-10-15):**
+
+- The user's run "open tiktok and scroll for 4 videos" took 57 s. Read from the OCR of each
+  observation: 4 medium (312 pt) flicks did not move the feed at all; a long (430 pt) flick
+  left it half-way between two videos; it finished snapping on its own seconds later. The AI
+  doubted its swipes and spent extra turns.
+- Swipe experiment (approved by the user; 12 swipes in TikTok's For You feed through a
+  separate Mirroir allowed only `swipe`, watched with window screenshots; Mirroir duration
+  measured around the call):
+
+  | Swipe | Mirroir | Result |
+  |---|---|---|
+  | 430 pt flick, 300 ms (v0.5.2 AI "long") | 3.47 s (window in background) | paged |
+  | 600 pt flick, 300 ms | 2.30 s | paged but **stuck at ~85% for 11 s+** until the next input |
+  | 30 pt at 100 pt/s (no momentum) | 0.66 s | the stuck feed snapped onto the next video |
+  | 400 pt at 488 pt/s (no momentum) | 1.24 s | snapped back (same video) |
+  | 450 pt at 479 pt/s | 1.37 s | paged, settled when Mirroir returned |
+  | 521 pt at 469 pt/s (×4) | 1.56–1.58 s | paged 3 of 4, settled; the 4th (0.3 s after the previous) snapped back while the next item was still black (not loaded) |
+  | 600 pt at 461 pt/s (×2) | 1.80 s | paged once; snapped back once (on a photo ad) |
+  | 521 pt down at 469 pt/s | 1.60 s | stayed on the same item (an ad) |
+
+  v0.6.0 therefore paces every swipe at 460 pt/s (no momentum tail) and pages with 70% of the
+  screen. Not yet run through the app itself (AI task, viewer, workflows) on the device.
 
 **Not yet verified on the real iPhone:**
 

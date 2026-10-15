@@ -369,8 +369,8 @@ export class WorkflowExecution {
       case 'swipe': {
         const geometry = this.deps.device.geometry;
         if (!geometry) throw new StepFailure(UNKNOWN_GEOMETRY);
-        // Mirroir's swipe, like the AI's: its momentum tail is what pages feeds.
-        const swipe = swipeAction(step.direction, step.distance ?? 'medium', geometry.widthPt, geometry.heightPt);
+        // The AI's paced swipe; without a distance it travels far enough to page feeds.
+        const swipe = swipeAction(step.direction, step.distance ?? 'long', geometry.widthPt, geometry.heightPt);
         await this.act(swipe, { summary: `Swipe ${step.direction}`, geometryId: geometry.geometryId });
         return { message: `Swiped ${step.direction}` };
       }

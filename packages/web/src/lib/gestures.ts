@@ -1,39 +1,35 @@
 // Pure mapping from viewer input to device actions.
 //
 // A pointer drag on the viewer becomes Mirroir's `swipe` (a synthesized
-// trackpad scroll) with the user's own start/end points and the gesture's real
-// duration: Mirroir gives a fast flick a momentum tail, which is what pages
-// feeds such as TikTok, and a slow drag scrolls without inertia. Mirroir's
-// `drag` is a pointer click-drag that iOS scroll views ignore (verified on a
-// real iPhone), so it is only sent in Long press mode, for sliders and the
-// like. A press without movement stays a tap (or a long-press / double-tap,
-// per the touch mode). Arrow keys send centred swipes.
+// trackpad scroll) paced just under Mirroir's flick speed (@iphone-ai/shared
+// swipe.ts): a faster swipe gets a ~1.4 s momentum tail that makes feeds creep
+// and can leave TikTok stuck between two videos. A drag released while still
+// moving is a flick and pages, like on the phone: it is sent as the swipe
+// tool's long swipe in the flick's direction, far enough for feeds such as
+// TikTok to snap to the next item. A drag that stops before release replays
+// the user's own start/end points. Mirroir's `drag` is a pointer click-drag
+// that iOS scroll views ignore (verified on a real iPhone), so it is only sent
+// in Long press mode, for sliders and the like. A press without movement stays
+// a tap (or a long-press / double-tap, per the touch mode). Arrow keys page
+// like a flick.
 
-import type { DeviceAction } from '@iphone-ai/shared';
+import { pacedSwipe, swipeAction, type DeviceAction } from '@iphone-ai/shared';
 
-import { classifyGesture, roundTo, type Size, type WindowPoint } from './geometry';
+import { classifyGesture, type Size, type WindowPoint } from './geometry';
 
 export type TouchMode = 'tap' | 'long_press' | 'double_tap';
 
-/** A swipe or drag shorter than this is still sent as 60 ms (Mirroir needs a few frames). */
+/** Long press mode click-drags: shorter ones are still sent as 60 ms (Mirroir needs a few frames). */
 export const DRAG_MIN_MS = 60;
-/**
- * A swipe is replayed after the pointer is released, so replaying a slow drag
- * at its own speed only adds lag: swipes are sent as quick flicks (Mirroir's
- * default duration, which gets momentum and pages feeds) in the user's
- * direction and distance.
- */
-export const SWIPE_REPLAY_MAX_MS = 300;
-/** Slower gestures are capped so one gesture never holds the device lane for long. */
+/** …and slower ones are capped so one gesture never holds the device lane for long. */
 export const DRAG_MAX_MS = 1500;
 export const LONG_PRESS_MIN_MS = 500;
 export const LONG_PRESS_MAX_MS = 3000;
 
-/** Keyboard flicks: swipe this fraction of the screen, centred, in FLICK_DURATION_MS (Mirroir's default, with momentum). */
-export const FLICK_FRACTION = 0.4;
-export const FLICK_DURATION_MS = 300;
-/** Flicks stay at least this far (points) from the screen edges (Home indicator, status bar, back gesture). */
-export const FLICK_EDGE_MARGIN_PT = 60;
+/** Release speed is measured over this last part of the drag. */
+export const RELEASE_WINDOW_MS = 100;
+/** A drag released at this speed or faster (window points per ms) is a flick: it pages. */
+export const FLICK_RELEASE_SPEED = 0.5;
 
 export type FlickDirection = 'up' | 'down' | 'left' | 'right';
 
@@ -41,6 +37,46 @@ export type FlickDirection = 'up' | 'down' | 'left' | 'right';
 export function clampDuration(ms: number, min: number, max: number): number {
   if (!Number.isFinite(ms)) return min;
   return Math.min(max, Math.max(min, Math.round(ms)));
+}
+
+export interface PointerSample {
+  /** Window point (clamped to the screen). */
+  point: WindowPoint;
+  /** performance.now() of the pointer event. */
+  t: number;
+}
+
+/**
+ * Pointer velocity at release in window points per ms: the movement over the
+ * last RELEASE_WINDOW_MS (the position then is interpolated between samples;
+ * a shorter gesture is measured from its first sample). A pointer that stopped
+ * before release has zero velocity.
+ */
+export function releaseVelocity(samples: readonly PointerSample[], end: PointerSample): { x: number; y: number } | null {
+  if (samples.length === 0) return null;
+  const track = [...samples, end];
+  const cut = end.t - RELEASE_WINDOW_MS;
+  let ref = track[0]!;
+  for (let i = 1; i < track.length && track[i - 1]!.t <= cut; i += 1) {
+    const a = track[i - 1]!;
+    const b = track[i]!;
+    if (b.t <= cut) {
+      ref = b;
+      continue;
+    }
+    const f = b.t > a.t ? (cut - a.t) / (b.t - a.t) : 0;
+    ref = { point: { x: a.point.x + (b.point.x - a.point.x) * f, y: a.point.y + (b.point.y - a.point.y) * f }, t: cut };
+  }
+  const dt = end.t - ref.t;
+  if (!(dt > 0)) return null;
+  return { x: (end.point.x - ref.point.x) / dt, y: (end.point.y - ref.point.y) / dt };
+}
+
+/** The direction of a flick (dominant axis), or null when the release was too slow to be one. */
+export function flickDirection(velocity: { x: number; y: number } | null): FlickDirection | null {
+  if (!velocity || Math.hypot(velocity.x, velocity.y) < FLICK_RELEASE_SPEED) return null;
+  if (Math.abs(velocity.y) >= Math.abs(velocity.x)) return velocity.y < 0 ? 'up' : 'down';
+  return velocity.x < 0 ? 'left' : 'right';
 }
 
 export interface PointerGesture {
@@ -53,6 +89,10 @@ export interface PointerGesture {
   travelPx: number;
   /** Press duration in milliseconds. */
   elapsedMs: number;
+  /** Velocity at release in window points per ms (releaseVelocity); null if unknown. */
+  release?: { x: number; y: number } | null;
+  /** Window size in points (needed to page on a flick). */
+  window?: Size | null;
 }
 
 /** Turns a finished pointer gesture into the device action to send (null when there is nothing to send). */
@@ -65,15 +105,15 @@ export function pointerGestureAction(gesture: PointerGesture): DeviceAction | nu
     if (mode === 'double_tap') return { kind: 'double_tap', x: from.x, y: from.y };
     return { kind: 'tap', x: from.x, y: from.y };
   }
+  if (mode === 'long_press') {
+    if (!to) return null;
+    return { kind: 'drag', fromX: from.x, fromY: from.y, toX: to.x, toY: to.y, durationMs: clampDuration(elapsedMs, DRAG_MIN_MS, DRAG_MAX_MS) };
+  }
+  const flick = flickDirection(gesture.release ?? null);
+  const page = flick ? flickAction(flick, gesture.window) : null;
+  if (page) return page;
   if (!to) return null;
-  return {
-    kind: mode === 'long_press' ? 'drag' : 'swipe',
-    fromX: from.x,
-    fromY: from.y,
-    toX: to.x,
-    toY: to.y,
-    durationMs: clampDuration(elapsedMs, DRAG_MIN_MS, mode === 'long_press' ? DRAG_MAX_MS : SWIPE_REPLAY_MAX_MS),
-  };
+  return pacedSwipe(from.x, from.y, to.x, to.y);
 }
 
 /** Arrow key → flick direction (the finger's direction: ArrowUp flicks up, i.e. to the next item). */
@@ -92,49 +132,12 @@ export function flickDirectionForKey(key: string): FlickDirection | null {
   }
 }
 
-function clampToScreen(value: number, length: number): number {
-  const center = length / 2;
-  const min = Math.min(FLICK_EDGE_MARGIN_PT, center);
-  const max = Math.max(length - FLICK_EDGE_MARGIN_PT, center);
-  return roundTo(Math.min(max, Math.max(min, value)), 1);
-}
-
 /**
- * A swipe with flick momentum across ~40% of the screen, centred, in 300 ms.
- * `window` is the Mirroir window size in points; returns null when it is unknown.
+ * A page swipe: the swipe tool's long swipe (70% of the screen, centred,
+ * paced without momentum). `window` is the Mirroir window size in points;
+ * returns null when it is unknown.
  */
 export function flickAction(direction: FlickDirection, window: Size | null | undefined): DeviceAction | null {
   if (!window || !(window.width > 0 && window.height > 0)) return null;
-  const cx = window.width / 2;
-  const cy = window.height / 2;
-  const halfX = (window.width * FLICK_FRACTION) / 2;
-  const halfY = (window.height * FLICK_FRACTION) / 2;
-  let from: WindowPoint;
-  let to: WindowPoint;
-  switch (direction) {
-    case 'up':
-      from = { x: cx, y: cy + halfY };
-      to = { x: cx, y: cy - halfY };
-      break;
-    case 'down':
-      from = { x: cx, y: cy - halfY };
-      to = { x: cx, y: cy + halfY };
-      break;
-    case 'left':
-      from = { x: cx + halfX, y: cy };
-      to = { x: cx - halfX, y: cy };
-      break;
-    case 'right':
-      from = { x: cx - halfX, y: cy };
-      to = { x: cx + halfX, y: cy };
-      break;
-  }
-  return {
-    kind: 'swipe',
-    fromX: clampToScreen(from.x, window.width),
-    fromY: clampToScreen(from.y, window.height),
-    toX: clampToScreen(to.x, window.width),
-    toY: clampToScreen(to.y, window.height),
-    durationMs: FLICK_DURATION_MS,
-  };
+  return swipeAction(direction, 'long', window.width, window.height);
 }

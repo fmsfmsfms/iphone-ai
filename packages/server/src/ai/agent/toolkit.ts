@@ -24,6 +24,8 @@ import {
   type ScreenElement,
   type SensitiveRule,
   type SwipeDirection,
+  type SwipeDistance,
+  swipeAction,
 } from '@iphone-ai/shared';
 
 import type { ActivityLog } from '../../core/activity-log.js';
@@ -118,7 +120,7 @@ type ToolOutput = { content: ModelContent[]; isError: boolean };
 
 /** Screenshots per task sent to the model; later observations are text only (history is never edited). */
 export const MAX_IMAGES_PER_TASK = 30;
-/** Default pause between repeated swipes (swipe `times` > 1); each Mirroir swipe already ends with ~1.2 s of momentum. */
+/** Default pause between repeated swipes (swipe `times` > 1); a paced swipe has already settled when Mirroir returns. */
 export const DEFAULT_SWIPE_INTERVAL_MS = 300;
 const ALREADY_FINISHED = 'The task already finished (finish_task was called). No more tools can run; reply with one short sentence for the user.';
 
@@ -141,7 +143,7 @@ const SHAPES = {
     distance: z
       .enum(['short', 'medium', 'long'])
       .optional()
-      .describe('How far the finger travels: short, medium (default) or long = 25%, 40% or 55% of the screen.'),
+      .describe('How far the finger travels: short, medium or long (default) = 25%, 45% or 70% of the screen. Long pages feeds (TikTok, Reels, Shorts) to the next item; shorter swipes scroll lists less.'),
     times: z
       .number()
       .int()
@@ -192,7 +194,7 @@ const DESCRIPTIONS: Record<ToolName, string> = {
   double_tap: 'Double-tap an element or point (e.g. to zoom or select a word).',
   long_press: 'Press and hold an element or point (context menus, Quick Actions).',
   swipe:
-    'Swipe across the middle of the screen with flick momentum (about 2.5 s each). "up" moves the finger up (scrolls down the page; next video in TikTok, Reels or Shorts). Use for scrolling and paging. With times > 1 it swipes repeatedly (interval_ms apart) and returns one observation after the last swipe.',
+    'Swipe across the middle of the screen (about 1.7 s each; the page has settled when it returns). "up" moves the finger up (scrolls down the page; next video in TikTok, Reels or Shorts). Use for scrolling and paging. With times > 1 it swipes repeatedly (interval_ms apart) and returns one observation after the last swipe.',
   type_text:
     'Type text into the currently focused text field (tap the field first). Never use for passwords, passcodes or codes. Do not include line breaks; use press_key "return" to submit.',
   press_key: 'Press a key: return (submit/search), delete (backspace), escape, tab, space or arrows.',
@@ -525,10 +527,10 @@ export class AgentToolkit {
             : { kind: 'long_press', x: resolved.x, y: resolved.y, ...(args.duration_ms ? { durationMs: Number(args.duration_ms) } : {}) };
     } else if (name === 'swipe') {
       if (!geometry) return errorResult('The screen size is unknown; call observe_screen first.');
-      action = swipeAction(args.direction as SwipeDirection, (args.distance as SwipeDistance | undefined) ?? 'medium', geometry.widthPt, geometry.heightPt);
+      action = swipeAction(args.direction as SwipeDirection, (args.distance as SwipeDistance | undefined) ?? 'long', geometry.widthPt, geometry.heightPt);
       repeat = typeof args.times === 'number' ? Math.min(10, Math.max(1, Math.round(args.times))) : 1;
       intervalMs = typeof args.interval_ms === 'number' ? Math.min(800, Math.max(300, Math.round(args.interval_ms))) : DEFAULT_SWIPE_INTERVAL_MS;
-      targetDescription = `${String(args.direction)} (${String(args.distance ?? 'medium')})${repeat > 1 ? ` ×${repeat}` : ''}`;
+      targetDescription = `${String(args.direction)} (${String(args.distance ?? 'long')})${repeat > 1 ? ` ×${repeat}` : ''}`;
     } else if (name === 'type_text') {
       action = { kind: 'type_text', text: String(args.text) };
     } else if (name === 'press_key') {
@@ -1255,61 +1257,8 @@ function focusedFieldGuess(elements: readonly ScreenElement[]): string | null {
   return field?.label ?? null;
 }
 
-export type SwipeDistance = 'short' | 'medium' | 'long';
-
-/**
- * Swipes for the AI swipe tool and workflow swipe steps: Mirroir's `swipe`, a
- * synthesized trackpad scroll whose momentum tail (~1.2 s) is what makes iOS
- * page feeds and carousels. Mirroir's `drag` is NOT a substitute: iPhone
- * Mirroring delivers it as a pointer click-drag, which scroll views such as
- * TikTok's feed ignore (verified on a real iPhone, v0.3.0). 300 ms is
- * Mirroir's calibrated default and fast enough to get flick momentum. Travel is
- * a fraction of the screen dimension along the swipe.
- */
-export const SWIPE_DURATION_MS = 300;
-export const SWIPE_TRAVEL: Readonly<Record<SwipeDistance, number>> = { short: 0.25, medium: 0.4, long: 0.55 };
-/** Swipe end points stay this far from the top and bottom edges (status bar, Home indicator). */
-export const SWIPE_MARGIN_Y = 60;
-/** …and this far from the side edges. */
-export const SWIPE_MARGIN_X = 24;
-
-export function swipeAction(
-  direction: SwipeDirection,
-  distance: SwipeDistance,
-  width: number,
-  height: number,
-): Extract<DeviceAction, { kind: 'swipe' }> {
-  const travel = SWIPE_TRAVEL[distance];
-  const clamp = (value: number, size: number, margin: number) => {
-    const low = Math.min(margin, size / 2);
-    const high = Math.max(size - margin, size / 2);
-    return Math.round(Math.min(high, Math.max(low, value)));
-  };
-  const cx = width / 2;
-  const cy = height / 2;
-  const halfY = (height * travel) / 2;
-  const halfX = (width * travel) / 2;
-  const x = (value: number) => clamp(value, width, SWIPE_MARGIN_X);
-  const y = (value: number) => clamp(value, height, SWIPE_MARGIN_Y);
-  const swipe = (fromX: number, fromY: number, toX: number, toY: number): Extract<DeviceAction, { kind: 'swipe' }> => ({
-    kind: 'swipe',
-    fromX: x(fromX),
-    fromY: y(fromY),
-    toX: x(toX),
-    toY: y(toY),
-    durationMs: SWIPE_DURATION_MS,
-  });
-  switch (direction) {
-    case 'up':
-      return swipe(cx, cy + halfY, cx, cy - halfY);
-    case 'down':
-      return swipe(cx, cy - halfY, cx, cy + halfY);
-    case 'left':
-      return swipe(cx + halfX, cy, cx - halfX, cy);
-    case 'right':
-      return swipe(cx - halfX, cy, cx + halfX, cy);
-  }
-}
+// Swipe geometry and pacing live in @iphone-ai/shared (swipe.ts); re-exported for the step engine and tests.
+export { SWIPE_MARGIN_X, SWIPE_MARGIN_Y, SWIPE_TRAVEL, swipeAction, type SwipeDistance } from '@iphone-ai/shared';
 
 function actionSignature(action: DeviceAction): string {
   const round = (n: number) => Math.round(n / 15);

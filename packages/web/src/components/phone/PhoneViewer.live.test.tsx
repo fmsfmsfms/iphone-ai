@@ -171,7 +171,7 @@ describe('honest status line', () => {
 });
 
 describe('drag gestures', () => {
-  it('a drag sends a Mirroir swipe with the real start/end points and duration', async () => {
+  it('a drag that stops before release replays the real start/end points at 460 pt/s (no momentum)', async () => {
     const { bodies } = actionRoute();
     render(<PhoneViewer interactive toolbar />);
     await deliver(42);
@@ -181,36 +181,52 @@ describe('drag gestures', () => {
     clock = 1_120;
     fireEvent.pointerMove(surface, { pointerId: 1, clientX: 205, clientY: 450 });
     clock = 1_250;
+    fireEvent.pointerMove(surface, { pointerId: 1, clientX: 205, clientY: 300 });
+    // Held still before release.
+    clock = 1_600;
     fireEvent.pointerUp(surface, { pointerId: 1, clientX: 205, clientY: 300 });
 
     await waitFor(() => expect(bodies).toHaveLength(1));
     expect(bodies[0]).toEqual({
-      action: { kind: 'swipe', fromX: 205, fromY: 600, toX: 205, toY: 300, durationMs: 250 },
+      action: { kind: 'swipe', fromX: 205, fromY: 600, toX: 205, toY: 300, durationMs: 653 },
       geometryId: '410x890',
       frameSeq: 42,
     });
   });
 
-  it('clamps quick flicks to 60 ms and replays slow drags as 300 ms flicks', async () => {
+  it('a flick (released while moving) pages with the long swipe; a slow drag keeps its own points', async () => {
     const { bodies } = actionRoute();
     render(<PhoneViewer interactive toolbar />);
     await deliver(1);
     const surface = screen.getByRole('application', SURFACE);
 
+    // Quick flick up: the long page swipe, centred (70% of the screen at 460 pt/s).
     fireEvent.pointerDown(surface, { pointerId: 1, button: 0, clientX: 100, clientY: 700 });
     clock += 15;
     fireEvent.pointerUp(surface, { pointerId: 1, clientX: 110, clientY: 200 });
     await waitFor(() => expect(bodies).toHaveLength(1));
 
+    // A drag still moving at release, but slowly (0.1 pt/ms): the user's own points.
     fireEvent.pointerDown(surface, { pointerId: 2, button: 0, clientX: 300, clientY: 200 });
     clock += 6_000;
     // Released outside the picture: the end point is clamped to the screen edge.
     fireEvent.pointerUp(surface, { pointerId: 2, clientX: 300, clientY: 2_000 });
     await waitFor(() => expect(bodies).toHaveLength(2));
 
+    // A flick down while moving fast at release, after a slow start.
+    fireEvent.pointerDown(surface, { pointerId: 3, button: 0, clientX: 200, clientY: 300 });
+    clock += 500;
+    fireEvent.pointerMove(surface, { pointerId: 3, clientX: 200, clientY: 330 });
+    clock += 40;
+    fireEvent.pointerMove(surface, { pointerId: 3, clientX: 200, clientY: 400 });
+    clock += 40;
+    fireEvent.pointerUp(surface, { pointerId: 3, clientX: 200, clientY: 470 });
+    await waitFor(() => expect(bodies).toHaveLength(3));
+
     expect(bodies.map((b) => (b as { action: unknown }).action)).toEqual([
-      { kind: 'swipe', fromX: 100, fromY: 700, toX: 110, toY: 200, durationMs: 60 },
-      { kind: 'swipe', fromX: 300, fromY: 200, toX: 300, toY: 890, durationMs: 300 },
+      { kind: 'swipe', fromX: 205, fromY: 757, toX: 205, toY: 134, durationMs: 1355 },
+      { kind: 'swipe', fromX: 300, fromY: 200, toX: 300, toY: 890, durationMs: 1500 },
+      { kind: 'swipe', fromX: 205, fromY: 134, toX: 205, toY: 757, durationMs: 1355 },
     ]);
   });
 
@@ -255,7 +271,7 @@ describe('drag gestures', () => {
 });
 
 describe('keyboard flicks', () => {
-  it('arrow keys swipe the focused screen: 40% of the screen, centred, in 300 ms', async () => {
+  it('arrow keys page the focused screen with the long swipe: 70% of the screen, centred, at 460 pt/s', async () => {
     const { bodies } = actionRoute();
     render(<PhoneViewer interactive toolbar />);
     await deliver(7);
@@ -277,9 +293,9 @@ describe('keyboard flicks', () => {
     await waitFor(() => expect(bodies).toHaveLength(3));
 
     expect(bodies).toEqual([
-      { action: { kind: 'swipe', fromX: 205, fromY: 623, toX: 205, toY: 267, durationMs: 300 }, geometryId: '410x890', frameSeq: 7 },
-      { action: { kind: 'swipe', fromX: 287, fromY: 445, toX: 123, toY: 445, durationMs: 300 }, geometryId: '410x890', frameSeq: 7 },
-      { action: { kind: 'swipe', fromX: 205, fromY: 267, toX: 205, toY: 623, durationMs: 300 }, geometryId: '410x890', frameSeq: 7 },
+      { action: { kind: 'swipe', fromX: 205, fromY: 757, toX: 205, toY: 134, durationMs: 1355 }, geometryId: '410x890', frameSeq: 7 },
+      { action: { kind: 'swipe', fromX: 349, fromY: 445, toX: 62, toY: 445, durationMs: 624 }, geometryId: '410x890', frameSeq: 7 },
+      { action: { kind: 'swipe', fromX: 205, fromY: 134, toX: 205, toY: 757, durationMs: 1355 }, geometryId: '410x890', frameSeq: 7 },
     ]);
   });
 

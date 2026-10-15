@@ -184,6 +184,7 @@ describe('recorder', () => {
     await h.service.recorderSettled();
     h.device.emitManual({ kind: 'tap', x: 205, y: 260 }, false); // failed → ignored
     h.device.emitManual({ kind: 'tap', x: 205, y: 260 }, true, 'workflow'); // not manual → ignored
+    // 400 of 898 pt: nearest to the swipe tool's medium travel (45%).
     h.device.emitManual({ kind: 'swipe', fromX: 205, fromY: 700, toX: 210, toY: 300 });
     await h.service.recorderSettled();
     h.device.emitManual({ kind: 'type_text', text: 'hello' });
@@ -198,7 +199,7 @@ describe('recorder', () => {
     expect(wf.steps).toEqual([
       { id: 's1', type: 'tap_text', label: 'General' },
       { id: 's2', type: 'tap_point', x: 50, y: 800, geometryId: '410x898' },
-      { id: 's3', type: 'swipe', direction: 'up', distance: 'long' },
+      { id: 's3', type: 'swipe', direction: 'up', distance: 'medium' },
       { id: 's4', type: 'type_text', text: 'hello' },
       { id: 's5', type: 'press_key', key: 'l+command' },
       { id: 's6', type: 'launch_app', app: 'Maps' },

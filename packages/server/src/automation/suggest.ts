@@ -14,7 +14,7 @@ STEP TYPES (JSON objects; omit "id" — it is assigned automatically):
 - {"type":"tap_text","label":"General"} — tap the element showing this visible text. Optional "exact": true for exact matching only.
 - {"type":"long_press_text","label":"Photos"} — long-press the element showing this text.
 - {"type":"tap_point","x":205,"y":340} — tap window coordinates in points. ONLY when the target has no visible text and the current screen below shows where it is.
-- {"type":"swipe","direction":"up","distance":"medium"} — direction the finger moves ("up" scrolls content down); distance is "short", "medium" or "long" (optional).
+- {"type":"swipe","direction":"up","distance":"long"} — direction the finger moves ("up" scrolls content down); distance is "short", "medium" or "long" (optional, default "long", which pages feeds such as TikTok).
 - {"type":"type_text","text":"hello"} — type into the focused field (tap the field first).
 - {"type":"press_key","key":"return"} — keys: return, escape, tab, delete, space, up, down, left, right; chords like "l+command".
 - {"type":"press_home"} — go to the Home Screen.
