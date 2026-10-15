@@ -5,11 +5,13 @@
 //   2. backend         node packages/server/scripts/bundle.mjs       -> packages/server/dist/server.mjs
 //   3. resources       src-tauri/resources/{server,web,claude-code}  (recreated)
 //   4. Node runtime    official Node.js 22 from nodejs.org (SHA-256 + signature verified) -> src-tauri/binaries/node-<triple>
-//   5. capture helper  src-tauri/capture/main.swift (swiftc, ScreenCaptureKit live view; scripts/build-capture.mjs)
-//                      -> src-tauri/binaries/iphone-ai-capture-<triple> (externalBin, ad-hoc signed until bundled)
+//   5. helpers         src-tauri/capture/main.swift (swiftc, ScreenCaptureKit live view; scripts/build-capture.mjs)
+//                      -> src-tauri/binaries/iphone-ai-capture-<triple>, and src-tauri/input/main.swift (the glide
+//                      swipe; scripts/build-input.mjs) -> src-tauri/binaries/iphone-ai-input-<triple>
+//                      (externalBins, ad-hoc signed until bundled)
 //   6. Claude Code     Agent SDK native binary -> src-tauri/resources/claude-code/claude
 //   7. signing         APPLE_SIGNING_IDENTITY, else Developer ID / Apple Development, else ad-hoc
-//   8. bundle          pnpm tauri build --bundles app (signs node + iphone-ai-capture with the app identity)
+//   8. bundle          pnpm tauri build --bundles app (signs node + both helpers with the app identity)
 //   9. release         copy to release/iPhone AI.app, remove the intermediate src-tauri/target/*/bundle/macos copies,
 //                      verify the signatures and the bundled helpers (the live-view helper must check in with
 //                      LaunchServices as BackgroundOnly), print a summary
@@ -51,6 +53,7 @@ import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { buildCapture, CAPTURE_NAME, smokeTest as captureSmokeTest } from './build-capture.mjs';
+import { buildInput, INPUT_NAME, smokeTestInput } from './build-input.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const tauriDir = path.join(root, 'src-tauri');
@@ -297,9 +300,9 @@ function sha256File(file) {
   return createHash('sha256').update(readFileSync(file)).digest('hex');
 }
 
-/** Step 5: the ScreenCaptureKit live-view helper, named for the Rust target `tauri build` uses. */
+/** Step 5: the ScreenCaptureKit live-view helper and the input (glide swipe) helper, named for the Rust target `tauri build` uses. */
 function stageCaptureHelper() {
-  step(5, 'Building the ScreenCaptureKit live-view helper');
+  step(5, 'Building the live-view and input helpers');
   const archTriple = { arm64: 'aarch64-apple-darwin', x64: 'x86_64-apple-darwin' }[process.arch];
   const rustTriple = rustHostTriple();
   const target = rustTriple === 'aarch64-apple-darwin' || rustTriple === 'x86_64-apple-darwin' ? rustTriple : archTriple;
@@ -310,6 +313,12 @@ function stageCaptureHelper() {
     info('--help runs ✓ (the bundled copy is re-signed with the app identity by tauri build)');
   } catch (error) {
     throw new BuildError(`capture helper: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  try {
+    const result = buildInput({ target, log: (line) => console.log(dim(line)) });
+    info(`${formatBytes(result.sizeBytes)} -> ${rel(result.path)}${result.built ? '' : ' (cached)'}`);
+  } catch (error) {
+    throw new BuildError(`input helper: ${error instanceof Error ? error.message : String(error)}`);
   }
 }
 
@@ -511,6 +520,14 @@ async function release(identity, options) {
     for (const problem of helperCheck.problems) console.error(dim(`    - ${problem}`));
     process.exitCode = 1;
   }
+  const inputCheck = verifyInputHelper(app);
+  if (inputCheck.ok) {
+    info(`input helper: signed by ${inputCheck.signature.authority} (hardened runtime), --help ✓, embedded Info.plist LSBackgroundOnly ✓, --dry-run ✓`);
+  } else {
+    console.error(red(`  input helper (Contents/MacOS/${INPUT_NAME}) FAILED verification:`));
+    for (const problem of inputCheck.problems) console.error(dim(`    - ${problem}`));
+    process.exitCode = 1;
+  }
   if (verify.ok) {
     info('codesign --verify --deep --strict: valid ✓');
   } else if (claudeOnly) {
@@ -535,7 +552,38 @@ async function release(identity, options) {
   if (!options.install) {
     info(dim('Tip: move it to /Applications and always launch that copy, so privacy grants stay attached to one path.'));
   }
-  return helperCheck.ok && (verify.ok || claudeOnly);
+  return helperCheck.ok && inputCheck.ok && (verify.ok || claudeOnly);
+}
+
+/**
+ * The bundled input helper: signed like the app (hardened runtime), --help and the embedded
+ * LSBackgroundOnly plist, and a --dry-run plan. Posts no input and needs no permission.
+ */
+function verifyInputHelper(app) {
+  const helper = path.join(app, 'Contents', 'MacOS', INPUT_NAME);
+  if (!existsSync(helper)) return { ok: false, problems: [`Contents/MacOS/${INPUT_NAME} is missing`] };
+  const problems = [];
+  const appSignature = signatureOf(app);
+  const helperSignature = signatureOf(helper);
+  if (helperSignature.authority !== appSignature.authority || helperSignature.team !== appSignature.team) {
+    problems.push(
+      `signed by "${helperSignature.authority}" (team ${helperSignature.team}), the app by "${appSignature.authority}" (team ${appSignature.team})`,
+    );
+  }
+  if (!helperSignature.runtime) problems.push('not signed with the hardened runtime');
+  const strict = capture('/usr/bin/codesign', ['--verify', '--strict', helper]);
+  if (!strict.ok) problems.push(`codesign --verify failed: ${strict.output.trim()}`);
+  const smoke = smokeTestInput(helper);
+  if (!smoke.ok) problems.push(smoke.detail);
+  const dry = capture(helper, ['glide', '--dx', '0', '--dy', '-100', '--dry-run'], { timeout: 15_000 });
+  let plan = null;
+  try {
+    plan = JSON.parse(dry.output.trim().split('\n').pop() ?? '');
+  } catch {
+    plan = null;
+  }
+  if (!dry.ok || plan?.ok !== true || plan?.wheel?.[1] !== -300) problems.push(`--dry-run: ${dry.output.trim().slice(0, 200)}`);
+  return { ok: problems.length === 0, problems, signature: helperSignature };
 }
 
 function signatureOf(file) {

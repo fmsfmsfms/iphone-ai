@@ -200,7 +200,7 @@ describe('AI swipe tool', () => {
     expect(def.description).toMatch(/pages to the next item and returns once the feed has settled/);
     const prompt = agentSystemPrompt({ mode: 'supervised', maxActions: 25, vision: true, tools: ['swipe'] });
     expect(prompt).toMatch(/swipe pages or scrolls across the middle of the screen/);
-    expect(prompt).toMatch(/one-screen flick that lands on the next item/);
+    expect(prompt).toMatch(/The default distance \(long\) pages to the next item and has settled when it returns/);
     expect(prompt).toMatch(/times/);
   });
 

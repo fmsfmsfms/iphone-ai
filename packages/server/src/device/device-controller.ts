@@ -45,6 +45,7 @@ import type { Logger } from '../core/logger.js';
 import { redactToolArgs } from '../core/redact.js';
 import type { SettingsStore } from '../core/settings-store.js';
 import { McpUnavailableError, type MirroirManager, type ToolCallOutcome } from '../mcp/mirroir-manager.js';
+import { buildPermissionFile } from '../mcp/workspace.js';
 import {
   classifyInputError,
   geometryId,
@@ -53,6 +54,7 @@ import {
   parseStatus,
   screenFingerprint,
 } from '../mcp/parsers.js';
+import type { InputHelper } from './input-helper.js';
 import { base64PngDimensions } from './png.js';
 
 export class DeviceError extends Error {
@@ -179,6 +181,8 @@ export class DeviceController extends EventEmitter {
      * mock Mirroir server used in tests/CI (never set for the real binary).
      */
     private readonly assumedPermissions: Omit<MacPermissions, 'checkedAt'> | null = null,
+    /** iPhone AI's own swipe (input-helper.ts); swipes use Mirroir when null or unavailable. */
+    private readonly input: InputHelper | null = null,
   ) {
     super();
     this.log = log.child('device');
@@ -533,9 +537,13 @@ export class DeviceController extends EventEmitter {
       if (this.queue[i]!.mutating) this.queue.splice(i, 1);
     }
     // 3. An input call already executing cannot be cancelled over MCP; SIGTERM
-    //    makes Mirroir interrupt playbacks and release held touches/keys.
+    //    makes Mirroir interrupt playbacks and release held touches/keys. A
+    //    glide from iPhone AI's input helper is ended (it lifts) instead.
     const inFlight = this.running?.mutating ? this.running.label : null;
-    if (inFlight) {
+    const glideStopped = inFlight !== null && this.input?.running === true;
+    if (glideStopped) {
+      this.input!.kill();
+    } else if (inFlight) {
       await this.mirroir.terminate(`Emergency stop during "${inFlight}"`);
       void this.mirroir.start().catch((err: unknown) => {
         this.log.error('Mirroir restart after the emergency stop failed', { error: String(err) });
@@ -553,9 +561,11 @@ export class DeviceController extends EventEmitter {
         detail: {
           cancelledQueuedActions: rejected.length,
           interruptedInFlight: inFlight,
-          note: inFlight
-            ? 'Mirroir was terminated with SIGTERM to release held input. Input already delivered to macOS cannot be undone.'
-            : 'No input was executing.',
+          note: glideStopped
+            ? 'The swipe from iPhone AI’s input helper was ended (it lifts the gesture). Input already delivered to macOS cannot be undone.'
+            : inFlight
+              ? 'Mirroir was terminated with SIGTERM to release held input. Input already delivered to macOS cannot be undone.'
+              : 'No input was executing.',
         },
       });
     }
@@ -606,11 +616,17 @@ export class DeviceController extends EventEmitter {
       const started = Date.now();
       let outcome: ToolCallOutcome;
       try {
-        outcome = await this.mirroir.call(tool, args, { timeoutMs: toolTimeout(action) });
-        if (outcome.ok && action.kind === 'swipe' && action.settle) await this.settleAfterSwipe(action, ctx, info.geometry);
+        const glided = action.kind === 'swipe' ? await this.glideSwipe(action) : null;
+        if (glided) {
+          outcome = glided;
+        } else {
+          outcome = await this.mirroir.call(tool, args, { timeoutMs: toolTimeout(action) });
+          if (outcome.ok && action.kind === 'swipe' && action.settle) await this.settleAfterSwipe(action, ctx, info.geometry);
+        }
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         this.recordAction(action, ctx, false, Date.now() - started, message);
+        if (err instanceof DeviceError) throw err;
         if (err instanceof McpUnavailableError) throw new DeviceError(message, 'mcp_unavailable', 503);
         throw new DeviceError(message, 'tool_failed', 502);
       }
@@ -630,6 +646,28 @@ export class DeviceController extends EventEmitter {
       this.emit('action', { action, ctx, ok: outcome.ok });
       return { ok: outcome.ok, tool, durationMs, message: outcome.text, focusChanged };
     }, ctx.signal);
+  }
+
+  /**
+   * A swipe through iPhone AI's own input helper (a glide that eases to a stop,
+   * so feeds snap at once). Null when Mirroir should swipe instead: no helper,
+   * a helper that could not start a gesture, or a swipe Mirroir's own
+   * permission file would refuse (input never goes around that file).
+   */
+  private async glideSwipe(action: Extract<DeviceAction, { kind: 'swipe' }>): Promise<ToolCallOutcome | null> {
+    const input = this.input;
+    if (!input?.available) return null;
+    if (!buildPermissionFile(this.settings.get()).allow.includes('swipe')) return null;
+    const started = Date.now();
+    const result = await input.glide(action.toX - action.fromX, action.toY - action.fromY);
+    const durationMs = Date.now() - started;
+    if (result.ok) {
+      const at = (x: number, y: number) => `(${Math.round(x)},${Math.round(y)})`;
+      return { ok: true, text: `Swiped from ${at(action.fromX, action.fromY)} to ${at(action.toX, action.toY)} (iPhone AI glide)`, images: [], durationMs };
+    }
+    if (result.code === 'stopped') throw new DeviceError('Stopped by the emergency stop.', 'stop_latched');
+    if (result.fallback) return null;
+    return { ok: false, text: `Swipe failed: ${result.message}`, images: [], durationMs };
   }
 
   /**

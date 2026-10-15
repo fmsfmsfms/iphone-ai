@@ -224,9 +224,15 @@ The backend log records `Live capture started (ScreenCaptureKit, WxH px, N fps)`
 
 ## AI gestures
 
-The AI `swipe` tool, workflow swipe steps and the Live viewer all send Mirroir `swipe` (a
-synthesized trackpad scroll; Mirroir `drag` is a pointer click-drag that iOS scroll views
-ignore), built by `@iphone-ai/shared` `swipe.ts`. `long` (the default) pages: a one-screen
+The AI `swipe` tool, workflow swipe steps and the Live viewer all send `swipe` actions built
+by `@iphone-ai/shared` `swipe.ts`. The DeviceController normally performs them with iPhone AI's
+own helper (`iphone-ai-input glide --dx --dy --duration-ms 250`): one scroll gesture along the
+action's vector (3 wheel units per point) that eases to a stop before the lift, so feeds snap at
+once; no settle nudge follows. It falls back to Mirroir `swipe` (a synthesized trackpad scroll;
+Mirroir `drag` is a pointer click-drag that iOS scroll views ignore) when the helper cannot start
+a gesture (not installed, no Accessibility permission, no window, could not activate iPhone
+Mirroring); a helper that stops part-way is reported as a failed swipe, never retried. The
+shapes below are what Mirroir receives. `long` (the default) pages: a one-screen
 flick (91 % of the screen dimension in 300 ms, with Mirroir's momentum tail) marked
 `settle: true`, after which the device controller sends a settle nudge in the same queued
 action (20 pt through the middle in 200 ms; it ends with the slow lift that makes iOS snap a

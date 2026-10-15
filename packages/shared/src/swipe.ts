@@ -11,7 +11,11 @@
 //   with it for over a second and TikTok snapped back about one time in three.
 // - A small slow nudge after a stranded scroll snapped it onto the nearest
 //   video every time.
-// So paging (`long`) is a flick sized to travel one screen — it moves fast and
+// iPhone AI's own input helper (server device/input-helper.ts) normally sends
+// every swipe as a "glide" along the same vector: fast, easing to a stop
+// before the lift, so the feed snaps at once (≈0.35 s; 6 of 6 pages). The
+// shapes below are what Mirroir's `swipe` sends when the helper is unavailable:
+// paging (`long`) is a flick sized to travel one screen — it moves fast and
 // lands at or near the next item — followed by a settle nudge in the same
 // direction (`settle`, sent by the device controller): 5 of 5 pages landed
 // cleanly, ≈2.9 s per page. `short` and `medium` scroll lists: paced just under

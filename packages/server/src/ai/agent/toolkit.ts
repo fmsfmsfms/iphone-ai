@@ -194,7 +194,7 @@ const DESCRIPTIONS: Record<ToolName, string> = {
   double_tap: 'Double-tap an element or point (e.g. to zoom or select a word).',
   long_press: 'Press and hold an element or point (context menus, Quick Actions).',
   swipe:
-    'Swipe across the middle of the screen. The default (long) pages to the next item and returns once the feed has settled (about 3 s); short and medium scroll lists without inertia (about 1 s). "up" moves the finger up (scrolls down the page; next video in TikTok, Reels or Shorts). With times > 1 it swipes repeatedly (interval_ms apart) and returns one observation after the last swipe.',
+    'Swipe across the middle of the screen. The default (long) pages to the next item and returns once the feed has settled (usually under a second); short and medium scroll lists without inertia. "up" moves the finger up (scrolls down the page; next video in TikTok, Reels or Shorts). With times > 1 it swipes repeatedly (interval_ms apart) and returns one observation after the last swipe.',
   type_text:
     'Type text into the currently focused text field (tap the field first). Never use for passwords, passcodes or codes. Do not include line breaks; use press_key "return" to submit.',
   press_key: 'Press a key: return (submit/search), delete (backspace), escape, tab, space or arrows.',

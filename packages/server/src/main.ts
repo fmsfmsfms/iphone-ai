@@ -12,6 +12,9 @@
 //   IPHONE_AI_CAPTURE_BIN     bundled ScreenCaptureKit live capture helper (iphone-ai-capture);
 //                             in development <repo>/src-tauri/binaries/iphone-ai-capture-<arch>-apple-darwin
 //                             is used when it exists. Without a helper, screenshot polling stays in charge.
+//   IPHONE_AI_INPUT_BIN       iPhone AI's swipe helper (iphone-ai-input); default: next to the bundled
+//                             node binary, else <repo>/src-tauri/binaries/iphone-ai-input-<arch>-apple-darwin.
+//                             Without it (and always in mock mode) swipes go through Mirroir.
 //   IPHONE_AI_MIRROIR_MOCK    path to the mock Mirroir server — TESTS/CI ONLY; the UI
 //                             and logs label the session as mock
 // Prints "LISTENING <port>" on stdout once the HTTP server is ready.
@@ -34,6 +37,7 @@ import type { AppContext } from './core/services.js';
 import { SettingsStore } from './core/settings-store.js';
 import { Database } from './db/database.js';
 import { DeviceController } from './device/device-controller.js';
+import { InputHelper, resolveInputHelper } from './device/input-helper.js';
 import { LiveCapture, resolveCaptureHelper } from './device/live-capture.js';
 import { ScreenStream } from './device/screen-stream.js';
 import { startLocalServer } from './http/server.js';
@@ -94,6 +98,9 @@ async function main(): Promise<void> {
     command: mockServer ? { command: process.execPath, args: [mockServer] } : null,
   });
   if (mockServer) log.warn('MOCK MODE: using the mock Mirroir server — no real iPhone is connected', { mockServer });
+  // iPhone AI's own swipe (never in mock mode: it would swipe the real phone).
+  const inputHelper = resolveInputHelper({ mock: Boolean(mockServer) });
+  if (!inputHelper.helper) log.info('Swipes go through Mirroir only', { reason: inputHelper.reason });
   const device = new DeviceController(
     mirroir,
     settings,
@@ -101,6 +108,7 @@ async function main(): Promise<void> {
     activity,
     log,
     mockServer ? { screenRecording: 'granted', accessibility: 'granted', source: 'mock Mirroir (assumed, not a real device)' } : null,
+    inputHelper.helper ? new InputHelper(inputHelper.helper, log.child('input')) : null,
   );
   const captureHelper = resolveCaptureHelper({ mock: Boolean(mockServer) });
   const live = new LiveCapture({

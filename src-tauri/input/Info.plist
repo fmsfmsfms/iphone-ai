@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Embedded into the iphone-ai-input binary at link time (__TEXT,__info_plist; see
+  scripts/build-input.mjs), like src-tauri/capture/Info.plist: if AppKit checks the process in
+  with LaunchServices, it registers as background-only, never as a second Dock app named
+  "iPhone AI". The name "iphone-ai-input" must not end with the app's CFBundleExecutable
+  ("iphone-ai"), or this plist would be ignored.
+
+  Accessibility (TCC) is attributed to the responsible process (iPhone AI).
+-->
+<plist version="1.0">
+<dict>
+  <key>CFBundleIdentifier</key>
+  <string>me.alsaud.iphoneai.input</string>
+  <key>CFBundleName</key>
+  <string>iPhone AI Input</string>
+  <key>CFBundleInfoDictionaryVersion</key>
+  <string>6.0</string>
+  <key>LSBackgroundOnly</key>
+  <true/>
+</dict>
+</plist>

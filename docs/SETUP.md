@@ -48,7 +48,8 @@ SHA-256 against nodejs.org's published checksums before bundling it.
    - **iPhone Mirroring** — click *Open iPhone Mirroring* and approve on the iPhone if asked,
      then **lock the iPhone** and keep it nearby (iPhone Mirroring only runs while it is locked).
    - **Screen Recording** — *Open settings*, enable **iPhone AI**, then **quit and reopen** iPhone AI.
-   - **Accessibility** — *Open settings*, enable **iPhone AI**.
+   - **Accessibility** — *Open settings*, enable **iPhone AI** (Mirroir's input and iPhone AI's
+     own swipe helper both use it).
    - **Automation** — the first time input is sent, macOS asks whether iPhone AI may
      control **System Events**; allow it (Mirroir uses it to bring the Mirroring window forward).
    - **AI provider** — Settings → AI Providers (see below).

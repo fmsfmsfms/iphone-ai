@@ -25,7 +25,9 @@ terminal app instead.
 ## "No window" / taps do nothing
 
 - **Accessibility** must be enabled for iPhone AI (System Settings → Privacy & Security →
-  Accessibility). Without it Mirroir cannot find the Mirroring window ("No window").
+  Accessibility). Without it Mirroir cannot find the Mirroring window ("No window"), and
+  swipes fall back from iPhone AI's fast glide to Mirroir's slower swipe (the backend log says
+  "Glide swipe did not run" with `not_trusted`).
 - **Automation → System Events**: macOS may ask whether iPhone AI may control System
   Events the first time input is sent. Allow it — Mirroir uses it to bring the iPhone
   Mirroring window to the front before delivering input.

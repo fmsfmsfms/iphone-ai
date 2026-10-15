@@ -18,6 +18,7 @@ import { ensureAppDirectories, resolveAppPaths, type AppPaths } from '../../src/
 import { SettingsStore } from '../../src/core/settings-store.js';
 import { Database } from '../../src/db/database.js';
 import { DeviceController } from '../../src/device/device-controller.js';
+import type { InputHelper } from '../../src/device/input-helper.js';
 import { MirroirManager } from '../../src/mcp/mirroir-manager.js';
 
 export const MOCK_SERVER = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../mock-mirroir/server.mjs');
@@ -100,6 +101,8 @@ export interface DeviceOptions extends CoreOptions {
   assumePermissions?: boolean;
   /** Start the mock server before returning (default true). */
   start?: boolean;
+  /** iPhone AI's own swipe helper (a fake in tests); default none, so swipes go to the mock Mirroir. */
+  input?: InputHelper | null;
 }
 
 export function makeTempDir(prefix = 'iphone-ai-test-'): string {
@@ -170,6 +173,7 @@ export async function createDeviceContext(options: DeviceOptions = {}): Promise<
     core.activity,
     silentLogger,
     options.assumePermissions === false ? null : MOCK_PERMISSIONS,
+    options.input ?? null,
   );
 
   const readMockLog = (): MockLogEntry[] => {

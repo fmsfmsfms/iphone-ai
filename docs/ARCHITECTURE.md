@@ -30,7 +30,14 @@
 │ unmodified) v0.40.1        ├───────►│ (window = the phone screen)    │
 └────────────────────────────┘ SCK/AX └───────────────▲───────────────┘
  iphone-ai-capture (bundled Swift helper, capture only) ─┘ SCK screenshots → JPEG → backend → UI
+ iphone-ai-input (bundled Swift helper) ── CGEvent scroll gesture ("glide") → Mirroring window, one per swipe
 ```
+
+Swipes are the one input iPhone AI posts itself: Mirroir's `swipe` either crawls or ends with a
+~1.4 s momentum tail it waits out, and iOS snaps a paging feed only on a slow lift. The
+DeviceController runs `iphone-ai-input glide` (an eased gesture that slows to a stop before the
+lift) for `swipe` actions after all its checks, and falls back to Mirroir's `swipe` when the
+helper cannot start a gesture (see `device/input-helper.ts`, `shared/src/swipe.ts`).
 
 ## Facts about Mirroir that shape the design (verified in its source, v0.40.1)
 
@@ -74,7 +81,7 @@
 | Mirroir permission file | Fail-closed allow list; no input tools at all in Observe-only/no-manual mode; `set_network`, `reset_app`, `shake`, `generate_skill`, `hold_keys`, `measure`, `switch_target`, `open_url` always denied; `blockedApps` for `launch_app`. |
 | Policy engine (`policy/engine.ts`) | Control mode; allowed AI tools; blocked apps on launches, tap targets and typed text; sensitive keyword rules → approval; credential/OTP screens → typing denied; commit-after-typing (send/submit) → approval; non-http URL schemes. |
 | Approval broker | Human decision with timeout; cancelled by STOP; every decision audited. |
-| DeviceController | Stop latch; control lease (manual vs AI/workflow); fresh geometry check before every coordinate action; bounds check; per-tool timeouts; Mirroir terminated on timeout. |
+| DeviceController | Stop latch; control lease (manual vs AI/workflow); fresh geometry check before every coordinate action; bounds check; per-tool timeouts; Mirroir terminated on timeout. Glide swipes only while the Mirroir permission file allows `swipe`; STOP ends a running glide. |
 | Agent toolkit | Max actions, max duration, loop detection (same action on unchanged screen), forced observation after every action, evidence-based verification on finish. |
 | UI | Prominent STOP (⌘. and Esc-Esc), current mode always visible, focus-steal notices. |
 | Physical | Closing iPhone Mirroring or locking the phone stops all input. |

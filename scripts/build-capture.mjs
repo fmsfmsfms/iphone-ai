@@ -34,14 +34,20 @@ import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const source = path.join(root, 'src-tauri', 'capture', 'main.swift');
-const infoPlist = path.join(root, 'src-tauri', 'capture', 'Info.plist');
 const binariesDir = path.join(root, 'src-tauri', 'binaries');
 export const CAPTURE_NAME = 'iphone-ai-capture';
 const MIN_MACOS = '15.0';
-const SIGNING_IDENTIFIER = 'me.alsaud.iphoneai.capture';
-const FRAMEWORKS = ['ScreenCaptureKit', 'CoreImage', 'CoreMedia', 'AppKit'];
 const SWIFT_TARGETS = { 'aarch64-apple-darwin': 'arm64', 'x86_64-apple-darwin': 'x86_64' };
+
+/** The live-view helper; scripts/build-input.mjs builds the input helper with the same steps. */
+const CAPTURE_SPEC = {
+  name: CAPTURE_NAME,
+  source: path.join(root, 'src-tauri', 'capture', 'main.swift'),
+  infoPlist: path.join(root, 'src-tauri', 'capture', 'Info.plist'),
+  signingIdentifier: 'me.alsaud.iphoneai.capture',
+  frameworks: ['ScreenCaptureKit', 'CoreImage', 'CoreMedia', 'AppKit'],
+  parseAsLibrary: true,
+};
 
 class CaptureBuildError extends Error {}
 
@@ -52,8 +58,12 @@ export function hostTriple() {
   return triple;
 }
 
+export function helperBinaryPath(name, triple = hostTriple()) {
+  return path.join(binariesDir, `${name}-${triple}`);
+}
+
 export function captureBinaryPath(triple = hostTriple()) {
-  return path.join(binariesDir, `${CAPTURE_NAME}-${triple}`);
+  return helperBinaryPath(CAPTURE_NAME, triple);
 }
 
 function capture(command, args, options = {}) {
@@ -68,11 +78,20 @@ function capture(command, args, options = {}) {
 }
 
 /**
- * Compiles, ad-hoc signs and smoke-tests the helper. Returns
+ * Compiles, ad-hoc signs and smoke-tests the capture helper. Returns
  * `{ path, triple, built, sizeBytes }` (`built` is false when the cached binary was current).
  */
-export function buildCapture({ force = false, target = hostTriple(), log = console.log } = {}) {
-  if (process.platform !== 'darwin') throw new CaptureBuildError('the capture helper can only be built on macOS.');
+export function buildCapture(options = {}) {
+  return buildSwiftHelper(CAPTURE_SPEC, options);
+}
+
+/**
+ * Compiles, ad-hoc signs and smoke-tests a Swift helper described by `spec`
+ * ({ name, source, infoPlist, signingIdentifier, frameworks, parseAsLibrary }).
+ */
+export function buildSwiftHelper(spec, { force = false, target = hostTriple(), log = console.log } = {}) {
+  const { name, source, infoPlist } = spec;
+  if (process.platform !== 'darwin') throw new CaptureBuildError(`${name} can only be built on macOS.`);
   const arch = SWIFT_TARGETS[target];
   if (!arch) throw new CaptureBuildError(`unsupported target ${target} (expected ${Object.keys(SWIFT_TARGETS).join(' or ')})`);
   for (const file of [source, infoPlist]) {
@@ -91,19 +110,19 @@ export function buildCapture({ force = false, target = hostTriple(), log = conso
     );
   }
 
-  const destination = captureBinaryPath(target);
+  const destination = helperBinaryPath(name, target);
   const flags = [
     '-O',
     '-swift-version',
     '5',
     '-target',
     `${arch}-apple-macos${MIN_MACOS}`,
-    '-parse-as-library',
-    ...FRAMEWORKS.flatMap((name) => ['-framework', name]),
+    ...(spec.parseAsLibrary ? ['-parse-as-library'] : []),
+    ...spec.frameworks.flatMap((framework) => ['-framework', framework]),
     // One argv entry each (the repo path contains a space; never join and re-split these).
     ...['-sectcreate', '__TEXT', '__info_plist', infoPlist].flatMap((arg) => ['-Xlinker', arg]),
   ];
-  const stampFile = path.join(binariesDir, `.${CAPTURE_NAME}-${target}.stamp`);
+  const stampFile = path.join(binariesDir, `.${name}-${target}.stamp`);
   const stamp = createHash('sha256')
     .update(readFileSync(source))
     .update('\0')
@@ -113,7 +132,7 @@ export function buildCapture({ force = false, target = hostTriple(), log = conso
     .update('\0')
     .update(version.output)
     .update('\0')
-    .update(SIGNING_IDENTIFIER)
+    .update(spec.signingIdentifier)
     .digest('hex');
   let previousStamp = null;
   try {
@@ -121,14 +140,14 @@ export function buildCapture({ force = false, target = hostTriple(), log = conso
   } catch {
     previousStamp = null;
   }
-  if (!force && previousStamp === stamp && existsSync(destination) && smokeTest(destination).ok) {
+  if (!force && previousStamp === stamp && existsSync(destination) && smokeTestHelper(destination, name).ok) {
     log(`  ${path.relative(root, destination)} is up to date (source unchanged)`);
     return { path: destination, triple: target, built: false, sizeBytes: statSync(destination).size };
   }
 
-  const workDir = mkdtempSync(path.join(os.tmpdir(), 'iphone-ai-capture-'));
+  const workDir = mkdtempSync(path.join(os.tmpdir(), `${name}-`));
   try {
-    const compiled = path.join(workDir, CAPTURE_NAME);
+    const compiled = path.join(workDir, name);
     const args = ['--sdk', 'macosx', 'swiftc', ...flags, '-o', compiled, source];
     log(`  $ xcrun ${args.map((arg) => (/\s/.test(arg) ? JSON.stringify(arg) : arg)).join(' ')}`);
     const compile = capture('/usr/bin/xcrun', args, { timeout: 600_000 });
@@ -136,10 +155,10 @@ export function buildCapture({ force = false, target = hostTriple(), log = conso
     if (!compile.ok) throw new CaptureBuildError(`swiftc failed (${compile.error?.message ?? `exit ${compile.status}`}).`);
 
     // Ad-hoc signature for local runs; `tauri build` re-signs the bundled copy with the app identity.
-    const sign = capture('/usr/bin/codesign', ['--force', '--sign', '-', '--identifier', SIGNING_IDENTIFIER, '--options', 'runtime', compiled]);
+    const sign = capture('/usr/bin/codesign', ['--force', '--sign', '-', '--identifier', spec.signingIdentifier, '--options', 'runtime', compiled]);
     if (!sign.ok) throw new CaptureBuildError(`ad-hoc signing failed: ${sign.output.trim()}`);
 
-    const smoke = smokeTest(compiled);
+    const smoke = smokeTestHelper(compiled, name);
     if (!smoke.ok) throw new CaptureBuildError(`the compiled helper did not run: ${smoke.detail}`);
 
     mkdirSync(binariesDir, { recursive: true });
@@ -161,8 +180,12 @@ export function buildCapture({ force = false, target = hostTriple(), log = conso
  * server), and the binary must carry the embedded Info.plist with LSBackgroundOnly.
  */
 export function smokeTest(binary) {
+  return smokeTestHelper(binary, CAPTURE_NAME);
+}
+
+export function smokeTestHelper(binary, name) {
   const result = capture(binary, ['--help'], { timeout: 15_000 });
-  if (!result.ok || !result.stdout.includes(`usage: ${CAPTURE_NAME}`)) {
+  if (!result.ok || !result.stdout.includes(`usage: ${name}`)) {
     return { ok: false, detail: `--help: ${(result.error?.message ?? `exit ${result.status}: ${result.output}`).trim()}` };
   }
   return embeddedPlistCheck(binary);

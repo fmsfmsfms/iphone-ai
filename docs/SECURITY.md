@@ -8,7 +8,8 @@ phone that you did not allow, and so that you can always stop it.
 - **Observe Only** mode: the AI can look and describe; it cannot tap, type or navigate.
 - **Manual control off**: clicking the live viewer does nothing until you enable it.
 - In this state Mirroir itself is started with an **empty allow list**, so even a bug in
-  iPhone AI could not send input through it.
+  iPhone AI could not send taps or typing through it. iPhone AI's own swipe helper (scroll
+  gestures only) is used only while that list allows swipes.
 - **Sensitive apps blocked**: Wallet, Passwords, password managers, authenticator apps,
   national-ID apps (Nafath, Absher) and common banking/payment apps. Edit the list in
   Settings → Permissions.
@@ -38,6 +39,12 @@ phone that you did not allow, and so that you can always stop it.
 7. **Never automated**: passwords, passcodes, verification codes, Face ID / Touch ID,
    sign-in prompts. The AI is told to hand control back to you, and typing on such
    screens is blocked.
+8. **Swipes from iPhone AI's input helper** — swipes are normally sent by the bundled
+   `iphone-ai-input` helper rather than Mirroir (a faster gesture that iOS snaps to the next
+   video). It can only post scroll-wheel gestures at the middle of the iPhone Mirroring window
+   (no taps, clicks or keys), runs only after all the checks above, and only while Mirroir's
+   permission file would allow `swipe`. This is enforced inside iPhone AI, not by Mirroir. If
+   the helper cannot start a gesture, Mirroir's `swipe` is used instead.
 
 ## STOP AI CONTROL
 
@@ -49,11 +56,12 @@ view-only remote sessions. It:
 3. rejects queued actions;
 4. if an input action is executing, terminates Mirroir with `SIGTERM` — Mirroir's
    handler interrupts gestures and lifts held touches/keys before exiting — and then
-   restarts it.
+   restarts it; a swipe from iPhone AI's input helper is ended instead (the helper lifts the
+   gesture and exits).
 
 Input that macOS has already delivered to the phone cannot be undone. Closing the
 iPhone Mirroring window (or locking the phone) is an additional physical kill switch:
-Mirroir cannot deliver any input without it.
+neither Mirroir nor the input helper can deliver any input without it.
 
 ## Data
 

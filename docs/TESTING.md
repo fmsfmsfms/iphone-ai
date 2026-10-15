@@ -10,11 +10,11 @@ Three kinds of evidence are kept strictly apart:
 
 ## Automated suites
 
-Last full run: 2026-10-15, v0.7.0, with the official Node 22 toolchain (`source scripts/env.sh`).
+Last full run: 2026-10-15, v0.8.0, with the official Node 22 toolchain (`source scripts/env.sh`).
 
 | Suite | Command | Result |
 |---|---|---|
-| Backend unit + integration (MOCK) | `pnpm --filter @iphone-ai/server test` | 580 passed (43 files, incl. the real capture helper's --test-pattern against the backend parser, and approval re-checks replayed from recorded real-device screens) |
+| Backend unit + integration (MOCK) | `pnpm --filter @iphone-ai/server test` | 595 passed (incl. the input helper against a fake helper, and the real Swift helper's dry runs) (43 files, incl. the real capture helper's --test-pattern against the backend parser, and approval re-checks replayed from recorded real-device screens) |
 | UI unit (jsdom) | `pnpm --filter @iphone-ai/web test` | 329 passed (33 files) |
 | Browser E2E (Playwright, MOCK backend + scripted model) | `pnpm test:e2e` | 24 passed (incl. the Live Control assistant panel: one scroller, approvals in view) |
 | Tauri shell (Rust) | `cd src-tauri && cargo test` | 21 passed; clippy and rustfmt clean |
@@ -190,7 +190,18 @@ iPhone Mirroring responded well.
   paged and settled 3 of 3 back to back (Mirroir 2.31–2.33 s + 0.52–0.53 s).
 
   v0.7.0: `long` swipes are that flick plus the settle nudge; short/medium stay paced.
-  Not yet run through the app itself on the device.
+
+**v0.7.0 on the real iPhone (2026-10-15):** one AI run "open tiktok and scroll for 4 videos":
+4 swipes of 2.95–2.97 s (flick + nudge), 3.3 s apart; 30.8 s for the task. The user still
+found paging not right.
+
+**Glide experiment (2026-10-15, approved by the user):** a scratch tool posting one scroll
+gesture directly (not through Mirroir): ~0.25 s of frames every 8 ms with an ease-out velocity,
+no momentum phase, lift after 40 ms at rest. With only 30 ms between the may-begin event and the
+gesture it paged 1 of 3; with Mirroir's 100 ms it paged and settled **6 of 6** (4 forward,
+1 back, and 2 back to back landing exactly two videos ahead in 1.55 s), each gesture ≈0.35 s.
+v0.8.0 ships it as the bundled `iphone-ai-input` helper (Mirroir's swipe as the fallback).
+Not yet run through the app itself on the device.
 
 **Not yet verified on the real iPhone:**
 
