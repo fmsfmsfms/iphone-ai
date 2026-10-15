@@ -114,25 +114,23 @@ describe('keyboard flicks', () => {
     expect(flickDirectionForKey('w')).toBeNull();
   });
 
-  it('pages with the long swipe: 70% of the screen, centred, at 460 pt/s (ArrowUp = finger moves up = next item)', () => {
-    expect(flickAction('up', phone)).toEqual({ kind: 'swipe', fromX: 205, fromY: 757, toX: 205, toY: 134, durationMs: 1355 });
-    expect(flickAction('down', phone)).toEqual({ kind: 'swipe', fromX: 205, fromY: 134, toX: 205, toY: 757, durationMs: 1355 });
-    expect(flickAction('left', phone)).toEqual({ kind: 'swipe', fromX: 349, fromY: 445, toX: 62, toY: 445, durationMs: 624 });
-    expect(flickAction('right', phone)).toEqual({ kind: 'swipe', fromX: 62, fromY: 445, toX: 349, toY: 445, durationMs: 624 });
+  it('pages with the long swipe: a one-screen flick (91%), centred, settled afterwards (ArrowUp = finger moves up = next item)', () => {
+    expect(flickAction('up', phone)).toEqual({ kind: 'swipe', fromX: 205, fromY: 850, toX: 205, toY: 40, durationMs: 300, settle: true });
+    expect(flickAction('down', phone)).toEqual({ kind: 'swipe', fromX: 205, fromY: 40, toX: 205, toY: 850, durationMs: 300, settle: true });
+    expect(flickAction('left', phone)).toEqual({ kind: 'swipe', fromX: 392, fromY: 445, toX: 18, toY: 445, durationMs: 300, settle: true });
+    expect(flickAction('right', phone)).toEqual({ kind: 'swipe', fromX: 18, fromY: 445, toX: 392, toY: 445, durationMs: 300, settle: true });
   });
 
-  it('works in landscape and keeps at least 60 pt from the top and bottom edges', () => {
-    const landscape = flickAction('up', { width: 890, height: 410 });
-    expect(landscape).toEqual({ kind: 'swipe', fromX: 445, fromY: 349, toX: 445, toY: 62, durationMs: 624 });
-    // A short window: 70% would reach into the margins, so the points are pulled in (and the swipe is shorter).
-    expect(flickAction('up', { width: 300, height: 250 })).toMatchObject({ fromY: 190, toY: 60, durationMs: 283 });
-    expect(flickAction('up', { width: 300, height: 160 })).toMatchObject({ fromY: 100, toY: 60, durationMs: 87 });
-    const tiny = flickAction('down', { width: 300, height: 100 });
-    expect(tiny).toMatchObject({ fromY: 50, toY: 50, durationMs: 60 });
-    for (const dir of ['up', 'down'] as const) {
+  it('works in landscape and on small windows, staying inside the window', () => {
+    expect(flickAction('up', { width: 890, height: 410 })).toEqual({ kind: 'swipe', fromX: 445, fromY: 392, toX: 445, toY: 18, durationMs: 300, settle: true });
+    expect(flickAction('up', { width: 300, height: 250 })).toMatchObject({ fromY: 239, toY: 11 });
+    expect(flickAction('up', { width: 300, height: 160 })).toMatchObject({ fromY: 153, toY: 7 });
+    expect(flickAction('down', { width: 300, height: 100 })).toMatchObject({ fromY: 5, toY: 96 });
+    for (const dir of ['up', 'down', 'left', 'right'] as const) {
       const a = flickAction(dir, { width: 375, height: 667 });
-      expect(a && a.kind === 'swipe' ? Math.min(a.fromY, a.toY) : 0).toBeGreaterThanOrEqual(60);
-      expect(a && a.kind === 'swipe' ? 667 - Math.max(a.fromY, a.toY) : 0).toBeGreaterThanOrEqual(60);
+      if (a?.kind !== 'swipe') throw new Error('expected a swipe');
+      for (const y of [a.fromY, a.toY]) expect(y > 0 && y < 667).toBe(true);
+      for (const x of [a.fromX, a.toX]) expect(x > 0 && x < 375).toBe(true);
     }
   });
 

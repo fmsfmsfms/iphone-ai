@@ -10,11 +10,11 @@ Three kinds of evidence are kept strictly apart:
 
 ## Automated suites
 
-Last full run: 2026-10-15, v0.6.0, with the official Node 22 toolchain (`source scripts/env.sh`).
+Last full run: 2026-10-15, v0.7.0, with the official Node 22 toolchain (`source scripts/env.sh`).
 
 | Suite | Command | Result |
 |---|---|---|
-| Backend unit + integration (MOCK) | `pnpm --filter @iphone-ai/server test` | 577 passed (43 files, incl. the real capture helper's --test-pattern against the backend parser, and approval re-checks replayed from recorded real-device screens) |
+| Backend unit + integration (MOCK) | `pnpm --filter @iphone-ai/server test` | 580 passed (43 files, incl. the real capture helper's --test-pattern against the backend parser, and approval re-checks replayed from recorded real-device screens) |
 | UI unit (jsdom) | `pnpm --filter @iphone-ai/web test` | 329 passed (33 files) |
 | Browser E2E (Playwright, MOCK backend + scripted model) | `pnpm test:e2e` | 24 passed (incl. the Live Control assistant panel: one scroller, approvals in view) |
 | Tauri shell (Rust) | `cd src-tauri && cargo test` | 21 passed; clippy and rustfmt clean |
@@ -166,7 +166,31 @@ The approval re-check of v0.5.0 has not run on the device yet.
   | 521 pt down at 469 pt/s | 1.60 s | stayed on the same item (an ad) |
 
   v0.6.0 therefore paces every swipe at 460 pt/s (no momentum tail) and pages with 70% of the
-  screen. Not yet run through the app itself (AI task, viewer, workflows) on the device.
+  screen.
+
+**v0.6.0 on the real iPhone (2026-10-15):** four AI runs "open tiktok and scroll for 4 videos"
+completed in 17–20 s (was 57 s), swipes 1.75 s inside Mirroir, each run one batch of 4 with
+the final screen settled. The user still found paging inaccurate (feed stopping half-way) and
+slow; the viewer was not tried (Manual control off). Their own two-finger trackpad swipes in
+iPhone Mirroring responded well.
+
+**Trackpad recording and page-swipe experiment (2026-10-15, approved by the user):**
+
+- A listen-only event tap (scroll and gesture events only) recorded 27 real two-finger swipes:
+  each scroll event carries the trackpad's sender ID and is paired with a trackpad gesture
+  event (type 29, subtype 6, same phase), plus 8 ms gesture frames; a flick is ~0.1–0.26 s of
+  finger movement and ~1.1 s of momentum. Mirroir's `swipe` posts bare scroll events with
+  sender 0.
+- Replaying recorded flicks event for event (full flicks and finger-only parts, with and
+  without refreshed timestamps) left TikTok stuck half-way in 5 of 7 tries; the 2 that
+  settled started from an already stuck feed. So the gap is not in the recordable events.
+- A slow 20–30 pt nudge after a stuck scroll snapped TikTok onto the nearest video every time
+  (3 of 3). A slow page drag (547 pt at 460 pt/s) paged 2 of 3 and snapped back once. A
+  one-screen flick (711 pt in 300 ms) landed exactly once and at ~95% once; flick + nudge
+  paged and settled 3 of 3 back to back (Mirroir 2.31–2.33 s + 0.52–0.53 s).
+
+  v0.7.0: `long` swipes are that flick plus the settle nudge; short/medium stay paced.
+  Not yet run through the app itself on the device.
 
 **Not yet verified on the real iPhone:**
 

@@ -249,6 +249,36 @@ describe('actions', () => {
     expect(calls.find((x) => x.name === 'press_key')?.args).toEqual({ key: 'return', modifiers: ['shift'] });
   });
 
+  it('follows a page flick (settle) with the slow settle nudge in the same job; plain swipes get none', async () => {
+    const c = await connected(MANUAL);
+    const flick: DeviceAction = { kind: 'swipe', fromX: 205, fromY: 858, toX: 205, toY: 40, durationMs: 300, settle: true };
+    const result = await c.device.perform(flick, user());
+    expect(result).toMatchObject({ ok: true, tool: 'swipe' });
+    const swipes = c.readMockCalls().filter((x) => x.name === 'swipe');
+    expect(swipes.map((x) => x.args)).toEqual([
+      { from_x: 205, from_y: 858, to_x: 205, to_y: 40, duration_ms: 300, cursor_mode: 'preserving' },
+      { from_x: 205, from_y: 459, to_x: 205, to_y: 439, duration_ms: 200, cursor_mode: 'preserving' },
+    ]);
+    // One action in the audit log, without the settle flag leaking into Mirroir's arguments.
+    expect(c.activity.query({ categories: ['manual'] }).filter((e) => e.type === 'tool.call')).toHaveLength(1);
+
+    await c.device.perform({ kind: 'swipe', fromX: 205, fromY: 651, toX: 205, toY: 247, durationMs: 879 }, user());
+    expect(c.readMockCalls().filter((x) => x.name === 'swipe')).toHaveLength(3);
+  });
+
+  it('skips the settle nudge when the task is cancelled during the flick', async () => {
+    const c = await connected({ ...SUPERVISED, mockState: { slowMs: { swipe: 600 } } });
+    const lease = c.device.acquireLease('ai', 'Paging task');
+    const abort = new AbortController();
+    const flick: DeviceAction = { kind: 'swipe', fromX: 205, fromY: 858, toX: 205, toY: 40, durationMs: 300, settle: true };
+    const running = c.device.perform(flick, { actor: 'ai', leaseId: lease.id, geometryId: GEOMETRY, decision: ALLOW, signal: abort.signal });
+    await waitFor(() => c.calledTools().includes('swipe'), { message: 'the flick never reached the mock' });
+    abort.abort();
+    expect(await running).toMatchObject({ ok: true });
+    expect(c.calledTools().filter((name) => name === 'swipe')).toHaveLength(1);
+    lease.release();
+  });
+
   it('serialises actions and observations through one lane', async () => {
     const c = await connected({ ...MANUAL, mockState: { slowMs: { tap: 400 } } });
     const order: string[] = [];

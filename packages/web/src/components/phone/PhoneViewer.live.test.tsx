@@ -200,7 +200,7 @@ describe('drag gestures', () => {
     await deliver(1);
     const surface = screen.getByRole('application', SURFACE);
 
-    // Quick flick up: the long page swipe, centred (70% of the screen at 460 pt/s).
+    // Quick flick up: the long page swipe, centred (a one-screen flick, settled afterwards).
     fireEvent.pointerDown(surface, { pointerId: 1, button: 0, clientX: 100, clientY: 700 });
     clock += 15;
     fireEvent.pointerUp(surface, { pointerId: 1, clientX: 110, clientY: 200 });
@@ -224,9 +224,9 @@ describe('drag gestures', () => {
     await waitFor(() => expect(bodies).toHaveLength(3));
 
     expect(bodies.map((b) => (b as { action: unknown }).action)).toEqual([
-      { kind: 'swipe', fromX: 205, fromY: 757, toX: 205, toY: 134, durationMs: 1355 },
+      { kind: 'swipe', fromX: 205, fromY: 850, toX: 205, toY: 40, durationMs: 300, settle: true },
       { kind: 'swipe', fromX: 300, fromY: 200, toX: 300, toY: 890, durationMs: 1500 },
-      { kind: 'swipe', fromX: 205, fromY: 134, toX: 205, toY: 757, durationMs: 1355 },
+      { kind: 'swipe', fromX: 205, fromY: 40, toX: 205, toY: 850, durationMs: 300, settle: true },
     ]);
   });
 
@@ -271,7 +271,7 @@ describe('drag gestures', () => {
 });
 
 describe('keyboard flicks', () => {
-  it('arrow keys page the focused screen with the long swipe: 70% of the screen, centred, at 460 pt/s', async () => {
+  it('arrow keys page the focused screen with the long swipe: a one-screen flick, centred, settled afterwards', async () => {
     const { bodies } = actionRoute();
     render(<PhoneViewer interactive toolbar />);
     await deliver(7);
@@ -293,9 +293,9 @@ describe('keyboard flicks', () => {
     await waitFor(() => expect(bodies).toHaveLength(3));
 
     expect(bodies).toEqual([
-      { action: { kind: 'swipe', fromX: 205, fromY: 757, toX: 205, toY: 134, durationMs: 1355 }, geometryId: '410x890', frameSeq: 7 },
-      { action: { kind: 'swipe', fromX: 349, fromY: 445, toX: 62, toY: 445, durationMs: 624 }, geometryId: '410x890', frameSeq: 7 },
-      { action: { kind: 'swipe', fromX: 205, fromY: 134, toX: 205, toY: 757, durationMs: 1355 }, geometryId: '410x890', frameSeq: 7 },
+      { action: { kind: 'swipe', fromX: 205, fromY: 850, toX: 205, toY: 40, durationMs: 300, settle: true }, geometryId: '410x890', frameSeq: 7 },
+      { action: { kind: 'swipe', fromX: 392, fromY: 445, toX: 18, toY: 445, durationMs: 300, settle: true }, geometryId: '410x890', frameSeq: 7 },
+      { action: { kind: 'swipe', fromX: 205, fromY: 40, toX: 205, toY: 850, durationMs: 300, settle: true }, geometryId: '410x890', frameSeq: 7 },
     ]);
   });
 

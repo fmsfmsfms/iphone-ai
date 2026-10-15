@@ -68,8 +68,8 @@ export function classifySwipe(
   const direction: SwipeDirection = vertical ? (dy < 0 ? 'up' : 'down') : dx < 0 ? 'left' : 'right';
   const span = vertical ? heightPt : widthPt;
   const ratio = span && span > 0 ? Math.abs(vertical ? dy : dx) / span : 0.35;
-  // Nearest of the swipe tool's travels (SWIPE_TRAVEL: 25%, 45%, 70%).
-  const distance: SwipeDistance = ratio < 0.35 ? 'short' : ratio < 0.575 ? 'medium' : 'long';
+  // Nearest of the swipe tool's travels (SWIPE_TRAVEL: 25%, 45%, and the 91% page flick).
+  const distance: SwipeDistance = ratio < 0.35 ? 'short' : ratio < 0.68 ? 'medium' : 'long';
   return { direction, distance };
 }
 

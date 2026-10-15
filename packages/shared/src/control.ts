@@ -16,7 +16,8 @@ export type DeviceAction =
   | { kind: 'tap'; x: number; y: number }
   | { kind: 'double_tap'; x: number; y: number }
   | { kind: 'long_press'; x: number; y: number; durationMs?: number }
-  | { kind: 'swipe'; fromX: number; fromY: number; toX: number; toY: number; durationMs?: number }
+  /** `settle`: follow with a slow settle nudge so a paging feed snaps to the nearest item (swipe.ts). */
+  | { kind: 'swipe'; fromX: number; fromY: number; toX: number; toY: number; durationMs?: number; settle?: boolean }
   | {
       kind: 'drag';
       fromX: number;

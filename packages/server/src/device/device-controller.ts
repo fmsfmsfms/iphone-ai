@@ -35,6 +35,7 @@ import {
   type PolicyDecision,
   type ScreenDescription,
   type WindowGeometry,
+  settleNudge,
 } from '@iphone-ai/shared';
 
 import type { ActivityLog } from '../core/activity-log.js';
@@ -606,6 +607,7 @@ export class DeviceController extends EventEmitter {
       let outcome: ToolCallOutcome;
       try {
         outcome = await this.mirroir.call(tool, args, { timeoutMs: toolTimeout(action) });
+        if (outcome.ok && action.kind === 'swipe' && action.settle) await this.settleAfterSwipe(action, ctx, info.geometry);
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         this.recordAction(action, ctx, false, Date.now() - started, message);
@@ -628,6 +630,28 @@ export class DeviceController extends EventEmitter {
       this.emit('action', { action, ctx, ok: outcome.ok });
       return { ok: outcome.ok, tool, durationMs, message: outcome.text, focusChanged };
     }, ctx.signal);
+  }
+
+  /**
+   * The settle nudge after a page flick (shared swipe.ts): a short slow swipe
+   * that makes iOS snap a feed stranded by the flick's momentum onto the
+   * nearest item. Part of the same queued action; skipped once a stop, cancel
+   * or pause arrives, and a failed nudge does not fail the swipe.
+   */
+  private async settleAfterSwipe(action: Extract<DeviceAction, { kind: 'swipe' }>, ctx: ActionContext, geometry: WindowGeometry | null): Promise<void> {
+    const nudge = geometry ? settleNudge(action, geometry.widthPt, geometry.heightPt) : null;
+    if (!nudge) return;
+    try {
+      this.assertAuthorized(action, ctx);
+    } catch {
+      return;
+    }
+    try {
+      const out = await this.mirroir.call('swipe', toolArgs(nudge), { timeoutMs: toolTimeout(nudge) });
+      if (!out.ok) this.log.warn('Settle nudge after a page swipe failed', { message: out.text.slice(0, 200) });
+    } catch (err) {
+      this.log.warn('Settle nudge after a page swipe failed', { error: err instanceof Error ? err.message : String(err) });
+    }
   }
 
   private assertAuthorized(action: DeviceAction, ctx: ActionContext): void {

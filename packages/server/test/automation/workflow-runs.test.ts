@@ -409,10 +409,10 @@ describe('workflow runs', () => {
     ]);
     const run = await runToEnd(id);
     expect(run.status).toBe('succeeded');
-    // The AI's paced swipe (no momentum tail); without a distance a step pages (long).
+    // The AI's swipe; without a distance a step pages (long: the settled one-screen flick).
     expect(h.device.performed.map((p) => p.action)).toEqual([
-      { kind: 'swipe', fromX: 205, fromY: 763, toX: 205, toY: 135, durationMs: 1366 },
-      { kind: 'swipe', fromX: 349, fromY: 449, toX: 62, toY: 449, durationMs: 624 },
+      { kind: 'swipe', fromX: 205, fromY: 858, toX: 205, toY: 40, durationMs: 300, settle: true },
+      { kind: 'swipe', fromX: 392, fromY: 449, toX: 18, toY: 449, durationMs: 300, settle: true },
     ]);
   });
 

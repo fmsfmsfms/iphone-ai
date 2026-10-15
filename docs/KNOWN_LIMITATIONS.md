@@ -7,16 +7,19 @@
   15 at most). It needs iPhone AI's Screen Recording grant. Without it, or if the helper
   fails, the viewer falls back to polling Mirroir's `screenshot` tool (≈2 fps, PNG over
   MCP). The viewer shows which source is live and the measured FPS/latency.
-- **A page swipe takes about 1.6 s.** Swipes go through Mirroir's `swipe`, a trackpad-style
-  scroll. A fast one (≥ 500 pt/s) gets a ~1.4 s momentum tail that Mirroir waits out
-  (≈2.3 s per swipe) and that can leave TikTok stuck half-way between two videos, so iPhone
-  AI paces every swipe at 460 pt/s: the feed snaps at the lift and has settled when Mirroir
-  returns. Paging needs the swipe to travel past about half a page (TikTok snapped back at
-  400 pt and paged from 450 pt of 782), so paging swipes travel 70% of the screen. A swipe
-  can still snap back when the next item has not loaded yet (seen once on the real iPhone).
-  A drag in the viewer is replayed after you release it. Mirroir's `drag` arrives as a
-  pointer click-drag, which iOS scroll views ignore (verified on the real iPhone). The AI can
-  page several items in one step (`times`) to save observations.
+- **A page swipe takes about 2.9 s.** Swipes go through Mirroir's `swipe`, a trackpad-style
+  scroll. iOS snaps a feed such as TikTok to the nearest item only when a scroll ends with a
+  slow lift. A fast swipe (≥ 500 pt/s) gets a ~1.4 s momentum tail that Mirroir waits out and
+  that leaves the feed wherever it stops — sometimes half-way between two videos; a slower
+  one ends with a slow lift but crawls for over a second and snapped back about one time in
+  three. So a page swipe is a one-screen flick (the video moves quickly and lands at or near
+  the next one, ≈2.3 s inside Mirroir) followed by a 0.5 s settle nudge that snaps it into
+  place. Your own two-finger trackpad swipes in iPhone Mirroring feel better, but a real flick
+  recorded from the trackpad and replayed event for event got stuck the same way, so the
+  difference lies in input that cannot be reproduced from software (most likely the
+  trackpad's raw touch data). A drag in the viewer is replayed after you
+  release it. Mirroir's `drag` arrives as a pointer click-drag, which iOS scroll views ignore
+  (verified on the real iPhone). The AI can page several items in one step (`times`).
 - **Input from the viewer costs ~1.2 s of window activation.** Mirroir brings iPhone
   Mirroring to the front before each tap or gesture (AppleScript, then three 300 ms settle
   waits for a swipe); a swipe measured 3.5 s when iPhone Mirroring was in the background and

@@ -1,13 +1,12 @@
 // Pure mapping from viewer input to device actions.
 //
 // A pointer drag on the viewer becomes Mirroir's `swipe` (a synthesized
-// trackpad scroll) paced just under Mirroir's flick speed (@iphone-ai/shared
-// swipe.ts): a faster swipe gets a ~1.4 s momentum tail that makes feeds creep
-// and can leave TikTok stuck between two videos. A drag released while still
+// trackpad scroll; @iphone-ai/shared swipe.ts). A drag released while still
 // moving is a flick and pages, like on the phone: it is sent as the swipe
-// tool's long swipe in the flick's direction, far enough for feeds such as
-// TikTok to snap to the next item. A drag that stops before release replays
-// the user's own start/end points. Mirroir's `drag` is a pointer click-drag
+// tool's long swipe in the flick's direction (a one-screen flick, then a settle
+// nudge, so feeds such as TikTok land on the next item). A drag that stops
+// before release replays the user's own start/end points, paced just under
+// Mirroir's flick speed so it scrolls exactly that far. Mirroir's `drag` is a pointer click-drag
 // that iOS scroll views ignore (verified on a real iPhone), so it is only sent
 // in Long press mode, for sliders and the like. A press without movement stays
 // a tap (or a long-press / double-tap, per the touch mode). Arrow keys page
@@ -133,9 +132,9 @@ export function flickDirectionForKey(key: string): FlickDirection | null {
 }
 
 /**
- * A page swipe: the swipe tool's long swipe (70% of the screen, centred,
- * paced without momentum). `window` is the Mirroir window size in points;
- * returns null when it is unknown.
+ * A page swipe: the swipe tool's long swipe (a one-screen flick, centred,
+ * settled afterwards). `window` is the Mirroir window size in points; returns
+ * null when it is unknown.
  */
 export function flickAction(direction: FlickDirection, window: Size | null | undefined): DeviceAction | null {
   if (!window || !(window.width > 0 && window.height > 0)) return null;

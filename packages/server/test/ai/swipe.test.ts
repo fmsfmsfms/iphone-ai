@@ -1,11 +1,12 @@
-// The AI "swipe" tool: Mirroir's `swipe` (a trackpad scroll), paced just under
-// Mirroir's flick speed so there is no momentum tail (Mirroir's `drag` is a
-// pointer click-drag that iOS scroll views ignore), optionally repeated
+// The AI "swipe" tool: Mirroir's `swipe` (a trackpad scroll; Mirroir's `drag`
+// is a pointer click-drag that iOS scroll views ignore). The default (long)
+// pages with a one-screen flick that the device controller settles; short and
+// medium are paced scrolls without a momentum tail. Optionally repeated
 // (`times`) with one observation at the end. Fake device; no Mirroir, no phone.
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { MIRROIR_FLICK_SPEED_PT_PER_S, type ActionResult, type DeviceAction, type ScreenDescription } from '@iphone-ai/shared';
+import { MIRROIR_FLICK_SPEED_PT_PER_S, settleNudge, type ActionResult, type DeviceAction, type ScreenDescription } from '@iphone-ai/shared';
 
 import { agentSystemPrompt } from '../../src/ai/agent/prompts.js';
 import { AgentToolkit, SWIPE_MARGIN_X, SWIPE_MARGIN_Y, swipeAction, type ToolkitTask } from '../../src/ai/agent/toolkit.js';
@@ -94,16 +95,25 @@ const text = (out: { content: ModelContent[] }) =>
     .join('\n');
 
 describe('swipeAction (swipe geometry)', () => {
-  it('swipes through the middle with 25/45/70% travel at 460 pt/s', () => {
+  it('scrolls short/medium (25/45%) at 460 pt/s and pages long with a settled one-screen flick (91%)', () => {
     expect(swipeAction('up', 'medium', 410, 898)).toEqual({ kind: 'swipe', fromX: 205, fromY: 651, toX: 205, toY: 247, durationMs: 879 });
     expect(swipeAction('up', 'short', 410, 898)).toEqual({ kind: 'swipe', fromX: 205, fromY: 561, toX: 205, toY: 337, durationMs: 487 });
-    expect(swipeAction('up', 'long', 410, 898)).toEqual({ kind: 'swipe', fromX: 205, fromY: 763, toX: 205, toY: 135, durationMs: 1366 });
+    expect(swipeAction('up', 'long', 410, 898)).toEqual({ kind: 'swipe', fromX: 205, fromY: 858, toX: 205, toY: 40, durationMs: 300, settle: true });
     expect(swipeAction('down', 'medium', 410, 898)).toEqual({ kind: 'swipe', fromX: 205, fromY: 247, toX: 205, toY: 651, durationMs: 879 });
-    expect(swipeAction('left', 'long', 410, 898)).toEqual({ kind: 'swipe', fromX: 349, fromY: 449, toX: 62, toY: 449, durationMs: 624 });
+    expect(swipeAction('left', 'long', 410, 898)).toEqual({ kind: 'swipe', fromX: 392, fromY: 449, toX: 18, toY: 449, durationMs: 300, settle: true });
     expect(swipeAction('right', 'short', 410, 898)).toEqual({ kind: 'swipe', fromX: 154, fromY: 449, toX: 256, toY: 449, durationMs: 222 });
+    // The iPhone 13 Mirroring window measured on the device (355×782 pt): 712 pt, the flick that moved TikTok one screen.
+    expect(swipeAction('up', 'long', 355, 782)).toEqual({ kind: 'swipe', fromX: 178, fromY: 747, toX: 178, toY: 35, durationMs: 300, settle: true });
   });
 
-  it('stays under Mirroir’s flick speed, so no swipe gets the momentum tail that strands feeds between pages', () => {
+  it('settles a page flick with a 20 pt nudge through the middle at 100 pt/s, in the same direction', () => {
+    expect(settleNudge(swipeAction('up', 'long', 410, 898), 410, 898)).toEqual({ kind: 'swipe', fromX: 205, fromY: 459, toX: 205, toY: 439, durationMs: 200 });
+    expect(settleNudge(swipeAction('left', 'long', 410, 898), 410, 898)).toEqual({ kind: 'swipe', fromX: 215, fromY: 449, toX: 195, toY: 449, durationMs: 200 });
+    expect(settleNudge({ fromX: 10, fromY: 10, toX: 10, toY: 10 }, 410, 898)).toBeNull();
+    expect(settleNudge(swipeAction('up', 'long', 410, 898), 0, 898)).toBeNull();
+  });
+
+  it('keeps short and medium scrolls under Mirroir’s flick speed (no momentum tail)', () => {
     for (const [w, h] of [
       [410, 898],
       [355, 782],
@@ -111,19 +121,18 @@ describe('swipeAction (swipe geometry)', () => {
       [300, 180],
     ] as const) {
       for (const direction of ['up', 'down', 'left', 'right'] as const) {
-        for (const distance of ['short', 'medium', 'long'] as const) {
+        for (const distance of ['short', 'medium'] as const) {
           const a = swipeAction(direction, distance, w, h);
+          expect(a.settle).toBeUndefined();
           const travel = Math.hypot(a.toX - a.fromX, a.toY - a.fromY);
           expect(travel / (a.durationMs / 1000)).toBeLessThan(MIRROIR_FLICK_SPEED_PT_PER_S);
           expect(a.durationMs).toBeGreaterThanOrEqual(60);
         }
       }
     }
-    // The iPhone 13 Mirroring window measured on the device (355×782 pt): a page swipe of 547 pt that TikTok snaps to the next video.
-    expect(swipeAction('up', 'long', 355, 782)).toEqual({ kind: 'swipe', fromX: 178, fromY: 665, toX: 178, toY: 117, durationMs: 1192 });
   });
 
-  it('keeps every swipe at least 60 pt from the top and bottom (and clear of the side edges)', () => {
+  it('keeps scrolls at least 60 pt from the top and bottom (clear of the sides) and page flicks inside the window', () => {
     const sizes: [number, number][] = [
       [410, 898],
       [430, 932],
@@ -136,13 +145,15 @@ describe('swipeAction (swipe geometry)', () => {
       for (const direction of ['up', 'down', 'left', 'right'] as const) {
         for (const distance of ['short', 'medium', 'long'] as const) {
           const a = swipeAction(direction, distance, w, h);
+          const marginY = distance === 'long' ? 1 : SWIPE_MARGIN_Y;
+          const marginX = distance === 'long' ? 1 : SWIPE_MARGIN_X;
           for (const y of [a.fromY, a.toY]) {
-            expect(y).toBeGreaterThanOrEqual(Math.min(SWIPE_MARGIN_Y, h / 2));
-            expect(y).toBeLessThanOrEqual(Math.max(h - SWIPE_MARGIN_Y, h / 2));
+            expect(y).toBeGreaterThanOrEqual(Math.min(marginY, h / 2));
+            expect(y).toBeLessThanOrEqual(Math.max(h - marginY, h / 2));
           }
           for (const x of [a.fromX, a.toX]) {
-            expect(x).toBeGreaterThanOrEqual(SWIPE_MARGIN_X);
-            expect(x).toBeLessThanOrEqual(w - SWIPE_MARGIN_X);
+            expect(x).toBeGreaterThanOrEqual(marginX);
+            expect(x).toBeLessThanOrEqual(w - marginX);
           }
           // Still a movement in the requested direction.
           if (direction === 'up') expect(a.toY).toBeLessThan(a.fromY);
@@ -165,10 +176,10 @@ describe('AI swipe tool', () => {
     const out = await k.kit.execute({ id: 's', name: 'swipe', args: { direction: 'up', reason: 'next video' } });
     expect(out.isError).toBe(false);
     expect(k.performed).toHaveLength(1);
-    // Default distance: long (pages feeds).
-    expect(k.performed[0]!.action).toEqual({ kind: 'swipe', fromX: 205, fromY: 763, toX: 205, toY: 135, durationMs: 1366 });
+    // Default distance: long (the settled page flick).
+    expect(k.performed[0]!.action).toEqual({ kind: 'swipe', fromX: 205, fromY: 858, toX: 205, toY: 40, durationMs: 300, settle: true });
     expect(k.performed[0]!.ctx.decision.verdict).toBe('allow');
-    expect(text(out)).toContain('Action: Swipe from (205, 763) to (205, 135)');
+    expect(text(out)).toContain('Action: Swipe from (205, 858) to (205, 40)');
   });
 
   it('is not offered, and a swipe is refused, when "swipe" is not an allowed AI tool', async () => {
@@ -186,11 +197,10 @@ describe('AI swipe tool', () => {
     const props = (def.parameters as { properties: Record<string, { minimum?: number; maximum?: number }> }).properties;
     expect(props.times).toMatchObject({ minimum: 1, maximum: 10 });
     expect(props.interval_ms).toMatchObject({ minimum: 300, maximum: 800 });
-    expect(def.description).toMatch(/settled when it returns/);
-    expect(def.description).not.toMatch(/momentum/i);
+    expect(def.description).toMatch(/pages to the next item and returns once the feed has settled/);
     const prompt = agentSystemPrompt({ mode: 'supervised', maxActions: 25, vision: true, tools: ['swipe'] });
-    expect(prompt).toMatch(/swipe scrolls across the middle of the screen \(about 1\.7 s each/);
-    expect(prompt).toMatch(/default distance \(long\) to page feeds/);
+    expect(prompt).toMatch(/swipe pages or scrolls across the middle of the screen/);
+    expect(prompt).toMatch(/one-screen flick that lands on the next item/);
     expect(prompt).toMatch(/times/);
   });
 
@@ -208,7 +218,7 @@ describe('AI swipe tool', () => {
     expect(Date.now() - started).toBeGreaterThanOrEqual(600);
     expect(k.kit.actionCount).toBe(3);
     const body = text(out);
-    expect(body).toContain('Action: Swipe from (205, 763) to (205, 135) ×3');
+    expect(body).toContain('Action: Swipe from (205, 858) to (205, 40) ×3');
     expect(body).toContain('Performed 3 swipes, 300 ms apart.');
     expect(body).toContain('Screen changed: yes');
     expect(body).toContain('Actions used: 3/25.');

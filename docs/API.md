@@ -226,15 +226,18 @@ The backend log records `Live capture started (ScreenCaptureKit, WxH px, N fps)`
 
 The AI `swipe` tool, workflow swipe steps and the Live viewer all send Mirroir `swipe` (a
 synthesized trackpad scroll; Mirroir `drag` is a pointer click-drag that iOS scroll views
-ignore), paced at 460 pt/s by `@iphone-ai/shared` `swipe.ts`: just under the 500 pt/s at
-which Mirroir adds a ~1.4 s momentum tail, so the feed snaps to the nearest page at the lift
-and has settled when Mirroir returns. The swipe is centred on the screen with travel
-`short | medium | long` = 25 / 45 / 70 % of the screen dimension (default `long`, which
-pages feeds), staying ≥ 60 pt from the top and bottom edges and ≥ 24 pt from the sides. The
-allowed-AI-tools setting governs it through its `swipe` entry. Optional `times` (1–10) and
+ignore), built by `@iphone-ai/shared` `swipe.ts`. `long` (the default) pages: a one-screen
+flick (91 % of the screen dimension in 300 ms, with Mirroir's momentum tail) marked
+`settle: true`, after which the device controller sends a settle nudge in the same queued
+action (20 pt through the middle in 200 ms; it ends with the slow lift that makes iOS snap a
+feed to the nearest item; skipped after a stop, cancel or pause; a failed nudge does not
+fail the swipe). `short | medium` (25 / 45 %) scroll lists at 460 pt/s, just under the
+500 pt/s at which Mirroir adds a momentum tail, staying ≥ 60 pt from the top and bottom
+edges and ≥ 24 pt from the sides. The allowed-AI-tools setting governs it through its
+`swipe` entry. Optional `times` (1–10) and
 `interval_ms` (300–800, default 300) repeat the swipe; every repetition is policy-checked and
 counted as an action, one approval covers the batch in Assisted Control, and one observation
 follows the last swipe. In the viewer, a drag released while moving at ≥ 0.5 pt/ms (measured
 over its last 100 ms) is a flick and sends the `long` swipe in the flick's direction; a drag
-that stops before release replays its own start and end points; arrow keys send the `long`
-swipe.
+that stops before release replays its own start and end points at 460 pt/s; arrow keys send
+the `long` swipe.

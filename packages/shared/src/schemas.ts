@@ -20,6 +20,7 @@ export const deviceActionSchema = z.discriminatedUnion('kind', [
     toX: point,
     toY: point,
     durationMs: duration.optional(),
+    settle: z.boolean().optional(),
   }),
   z.object({
     kind: z.literal('drag'),

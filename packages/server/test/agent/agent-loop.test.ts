@@ -42,7 +42,7 @@ describe('AI task loop (scripted model × mock Mirroir)', () => {
       expect(messages.map((m) => m.role)).toEqual(['user', 'assistant']);
     });
 
-    it('swipes with Mirroir swipe (long page swipe without momentum), never a click-drag, and repeats with one observation', async () => {
+    it('pages with Mirroir swipe (a one-screen flick, then the settle nudge), never a click-drag, and repeats with one observation', async () => {
       h.setScript(({ turn }) => {
         if (turn === 0) return { toolCalls: [call('swipe', { direction: 'up', reason: 'scroll down' })] };
         if (turn === 1) return { toolCalls: [call('swipe', { direction: 'up', times: 2, interval_ms: 300, reason: 'page twice' })] };
@@ -54,11 +54,16 @@ describe('AI task loop (scripted model × mock Mirroir)', () => {
       const calls = h.calls().filter((c) => c.name);
       // iOS scroll views ignore Mirroir's click-drag (verified on a real iPhone).
       expect(calls.some((c) => c.name === 'drag')).toBe(false);
+      // Each page swipe is two Mirroir swipes: the flick, then the slow 20 pt settle nudge.
       const swipes = calls.filter((c) => c.name === 'swipe');
-      expect(swipes).toHaveLength(3);
-      for (const swipe of swipes) {
-        expect(swipe.args).toEqual({ from_x: 205, from_y: 763, to_x: 205, to_y: 135, duration_ms: 1366, cursor_mode: 'preserving' });
-      }
+      expect(swipes).toHaveLength(6);
+      swipes.forEach((swipe, i) => {
+        expect(swipe.args).toEqual(
+          i % 2 === 0
+            ? { from_x: 205, from_y: 858, to_x: 205, to_y: 40, duration_ms: 300, cursor_mode: 'preserving' }
+            : { from_x: 205, from_y: 459, to_x: 205, to_y: 439, duration_ms: 200, cursor_mode: 'preserving' },
+        );
+      });
       // One observation after the repeated swipes: no describe_screen between the last two.
       const names = calls.map((c) => c.name);
       const last = names.lastIndexOf('swipe');
@@ -67,7 +72,7 @@ describe('AI task loop (scripted model × mock Mirroir)', () => {
       expect(names.slice(last + 1)).toContain('describe_screen');
       const audited = h.activity.query({ categories: ['ai'] }).filter((e) => e.tool === 'swipe');
       expect(audited).toHaveLength(3);
-      expect(audited[0]!.summary).toMatch(/^Swipe from \(205, 763\) to \(205, 135\)/);
+      expect(audited[0]!.summary).toMatch(/^Swipe from \(205, 858\) to \(205, 40\)/);
     });
 
     it('marks success as NOT verified when the evidence is not on the final screen', async () => {

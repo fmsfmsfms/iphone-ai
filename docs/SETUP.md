@@ -63,7 +63,7 @@ SHA-256 against nodejs.org's published checksums before bundling it.
   polled screenshots (≈2 fps). The panel shows the source and the measured FPS/latency.
 - Turn on **Manual control** (left panel or `M`) to interact: click = tap, drag = swipe (sent
   when you release; a flick — released while still moving — pages feeds like TikTok to the
-  next item, a drag you stop before releasing scrolls exactly that far),
+  next item in about 3 s, a drag you stop before releasing scrolls exactly that far),
   arrow keys page (↑ = next item), a drag in Long press mode = click-drag for sliders,
   and Long-press / Double-tap modes. Home, Back, App Switcher,
   Spotlight, Open app, and a text field for typing are in the left panel.

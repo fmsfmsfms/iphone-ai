@@ -120,7 +120,7 @@ type ToolOutput = { content: ModelContent[]; isError: boolean };
 
 /** Screenshots per task sent to the model; later observations are text only (history is never edited). */
 export const MAX_IMAGES_PER_TASK = 30;
-/** Default pause between repeated swipes (swipe `times` > 1); a paced swipe has already settled when Mirroir returns. */
+/** Default pause between repeated swipes (swipe `times` > 1); every swipe has already settled when it returns. */
 export const DEFAULT_SWIPE_INTERVAL_MS = 300;
 const ALREADY_FINISHED = 'The task already finished (finish_task was called). No more tools can run; reply with one short sentence for the user.';
 
@@ -143,7 +143,7 @@ const SHAPES = {
     distance: z
       .enum(['short', 'medium', 'long'])
       .optional()
-      .describe('How far the finger travels: short, medium or long (default) = 25%, 45% or 70% of the screen. Long pages feeds (TikTok, Reels, Shorts) to the next item; shorter swipes scroll lists less.'),
+      .describe('long (default) pages: a one-screen flick that lands on the next item (TikTok, Reels, Shorts: the next video). short or medium scroll a list 25% or 45% of the screen without inertia.'),
     times: z
       .number()
       .int()
@@ -194,7 +194,7 @@ const DESCRIPTIONS: Record<ToolName, string> = {
   double_tap: 'Double-tap an element or point (e.g. to zoom or select a word).',
   long_press: 'Press and hold an element or point (context menus, Quick Actions).',
   swipe:
-    'Swipe across the middle of the screen (about 1.7 s each; the page has settled when it returns). "up" moves the finger up (scrolls down the page; next video in TikTok, Reels or Shorts). Use for scrolling and paging. With times > 1 it swipes repeatedly (interval_ms apart) and returns one observation after the last swipe.',
+    'Swipe across the middle of the screen. The default (long) pages to the next item and returns once the feed has settled (about 3 s); short and medium scroll lists without inertia (about 1 s). "up" moves the finger up (scrolls down the page; next video in TikTok, Reels or Shorts). With times > 1 it swipes repeatedly (interval_ms apart) and returns one observation after the last swipe.',
   type_text:
     'Type text into the currently focused text field (tap the field first). Never use for passwords, passcodes or codes. Do not include line breaks; use press_key "return" to submit.',
   press_key: 'Press a key: return (submit/search), delete (backspace), escape, tab, space or arrows.',
