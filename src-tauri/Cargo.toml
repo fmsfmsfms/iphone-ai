@@ -1,8 +1,9 @@
 [package]
 name = "iphone-ai"
-version = "0.9.1"
+version = "0.9.2"
 description = "iPhone AI desktop shell: starts the bundled Node.js backend and hosts its UI."
 edition = "2021"
+license = "MIT"
 rust-version = "1.90"
 publish = false
 

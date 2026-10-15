@@ -1472,7 +1472,7 @@ dependencies = [
 
 [[package]]
 name = "iphone-ai"
-version = "0.9.1"
+version = "0.9.2"
 dependencies = [
  "libc",
  "serde_json",
