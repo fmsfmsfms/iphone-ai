@@ -7,7 +7,9 @@ import { act, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import type { ControlMode } from '@iphone-ai/shared';
 import './messages';
+import { setLanguage, type Language } from '../../lib/i18n';
 import { appStore, dispatchServerEvent, reduceBootstrap, resetStoreForTests, setConnection } from '../../state/store';
 import { makeApproval, makeBootstrap, makeMessage, makeSettings, makeTask } from '../../test/fixtures';
 import { calledRoutes, jsonResponse, routeFetch } from '../../test/http';
@@ -136,5 +138,47 @@ describe('Live Control assistant panel conversation', () => {
     expect(cards[0]).toHaveTextContent('Open TikTok');
     expect(cards[1]).toHaveTextContent('Tap “Send” in Messages');
     expect(screen.getByRole('heading', { name: 'Needs your approval' })).toBeInTheDocument();
+  });
+});
+
+// The empty panel describes the active control mode instead of promising
+// approvals that AI Mode never asks for.
+describe('Live Control assistant panel empty state', () => {
+  const BODY: Record<Language, Record<ControlMode, string>> = {
+    en: {
+      observe: 'Describe a task, for example “Open Settings and turn on Dark Mode”. In Observe Only the AI just looks at the screen — it never taps, swipes or types.',
+      assisted: 'Describe a task, for example “Open Settings and turn on Dark Mode”. In Assisted mode every action waits for your approval before it touches your iPhone.',
+      supervised:
+        'Describe a task, for example “Open Settings and turn on Dark Mode”. In AI Mode the AI acts without asking for approval — blocked apps stay off limits, it won’t type on password or code screens, and every task has action and time limits.',
+    },
+    ar: {
+      observe: 'صف مهمة، مثل «افتح الإعدادات وفعّل الوضع الداكن». في وضع «مراقبة فقط» يكتفي الذكاء الاصطناعي بالنظر إلى الشاشة — لا ينقر ولا يسحب ولا يكتب.',
+      assisted: 'صف مهمة، مثل «افتح الإعدادات وفعّل الوضع الداكن». في الوضع المساعَد ينتظر كل إجراء موافقتك قبل أن يلمس جهاز iPhone.',
+      supervised:
+        'صف مهمة، مثل «افتح الإعدادات وفعّل الوضع الداكن». في وضع الذكاء الاصطناعي ينفّذ الذكاء الاصطناعي الإجراءات دون أن يطلب موافقتك — تبقى التطبيقات المحظورة خارج النطاق، ولا يكتب في شاشات كلمات المرور والرموز، ولكل مهمة حدود لعدد الإجراءات والوقت.',
+    },
+  };
+  const cases = (['en', 'ar'] as const).flatMap((language) =>
+    (['observe', 'assisted', 'supervised'] as const).map((mode) => [language, mode] as const),
+  );
+
+  afterEach(() => setLanguage('en'));
+
+  it.each(cases)('%s, %s mode', async (language, mode) => {
+    setLanguage(language);
+    routeFetch({
+      '/api/conversations': () => jsonResponse(200, [conversation]),
+      '/api/conversations/conv_1/messages': () => jsonResponse(200, []),
+      '/api/conversations/conv_1/tasks': () => jsonResponse(200, []),
+    });
+    act(() => {
+      appStore.setState((s) => reduceBootstrap(s, makeBootstrap({ settings: makeSettings((x) => {
+        x.permissions.controlMode = mode;
+      }) })));
+      setConnection({ socket: 'open' });
+    });
+    render(<AssistantPanel />);
+    expect(await screen.findByText(BODY[language][mode])).toBeInTheDocument();
+    expect(screen.queryByText(/asks before sensitive actions|يطلب الإذن قبل الإجراءات الحساسة/)).not.toBeInTheDocument();
   });
 });

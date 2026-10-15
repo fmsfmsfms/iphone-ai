@@ -4,7 +4,7 @@
 // composer (disabled with a reason when sending isn't possible).
 
 import { ArrowUpRightFromSquare, BroomMotion, ChevronDown, Comments, EllipsisVertical, Eye, Gear, Hand, Smartphone, Sparkles, TrashBin } from '@gravity-ui/icons';
-import type { Conversation } from '@iphone-ai/shared';
+import type { ControlMode, Conversation } from '@iphone-ai/shared';
 import { Button, Dropdown, Label } from '@heroui/react';
 import { useCallback, useRef, useState, type ReactNode } from 'react';
 
@@ -164,11 +164,11 @@ export function ConversationView({ conversation, onCreated, onChanged, onDelete 
           renderTask={renderTask}
           attention={needsApproval}
           contentClassName="px-[max(1.25rem,calc((100%-50rem)/2))]"
-          empty={<Welcome onPick={(text) => void send(text).catch(() => undefined)} disabled={examplesDisabled} />}
+          empty={<Welcome mode={mode} onPick={(text) => void send(text).catch(() => undefined)} disabled={examplesDisabled} />}
         />
       ) : (
         <div className="app-scroll flex min-h-0 flex-1 flex-col px-[max(1.25rem,calc((100%-50rem)/2))] py-5">
-          <Welcome onPick={(text) => void send(text).catch(() => undefined)} disabled={examplesDisabled} />
+          <Welcome mode={mode} onPick={(text) => void send(text).catch(() => undefined)} disabled={examplesDisabled} />
         </div>
       )}
 
@@ -244,7 +244,7 @@ function ObserveHint() {
   );
 }
 
-function Welcome({ onPick, disabled }: { onPick: (text: string) => void; disabled: boolean }) {
+function Welcome({ mode, onPick, disabled }: { mode: ControlMode; onPick: (text: string) => void; disabled: boolean }) {
   const { t } = useI18n();
   return (
     <div className="my-auto flex flex-col items-center gap-5 py-8 text-center">
@@ -273,7 +273,7 @@ function Welcome({ onPick, disabled }: { onPick: (text: string) => void; disable
           );
         })}
       </div>
-      <p className="max-w-lg text-[11px] leading-relaxed text-muted">{t('assistant.welcome.safety')}</p>
+      <p className="max-w-lg text-[11px] leading-relaxed text-muted">{t('assistant.welcome.safety', { rule: t(`mode.${mode}.safety`) })}</p>
     </div>
   );
 }

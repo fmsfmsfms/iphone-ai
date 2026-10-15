@@ -210,7 +210,7 @@ export function AssistantPanel() {
                 tone="ai"
                 icon={<Sparkles />}
                 title={t('live.assistant.empty.title')}
-                description={t('live.assistant.empty.body')}
+                description={t('live.assistant.empty.body', { rule: t(`mode.${mode}.safety`) })}
                 className="my-auto"
               />
             }

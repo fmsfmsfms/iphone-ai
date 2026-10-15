@@ -3,6 +3,8 @@ import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import './messages';
+import type { ControlMode } from '@iphone-ai/shared';
+import { setLanguage, type Language } from '../../lib/i18n';
 import { makeBootstrap, makeMessage, makeSettings, makeStep, makeTask } from '../../test/fixtures';
 import { TaskCard } from '../../components/chat';
 import { appStore, reduceBootstrap, replaceMessages, resetStoreForTests, setConnection, setTaskSteps, upsertTask } from '../../state/store';
@@ -113,5 +115,42 @@ describe('ConversationView', () => {
     expect(screen.queryByRole('note')).not.toBeInTheDocument();
     // A safety block is not worth retrying as is.
     expect(screen.queryByRole('button', { name: /try again/i })).not.toBeInTheDocument();
+  });
+});
+
+// The welcome's safety line describes the active control mode: AI Mode never
+// asks for approval, so it must not promise that sensitive actions do.
+describe('ConversationView welcome safety line', () => {
+  const SAFETY: Record<Language, Record<ControlMode, string>> = {
+    en: {
+      observe: 'In Observe Only the AI just looks at the screen — it never taps, swipes or types. Press STOP (⌘.) at any time.',
+      assisted: 'In Assisted mode every action waits for your approval before it touches your iPhone. Press STOP (⌘.) at any time.',
+      supervised:
+        'In AI Mode the AI acts without asking for approval — blocked apps stay off limits, it won’t type on password or code screens, and every task has action and time limits. Press STOP (⌘.) at any time.',
+    },
+    ar: {
+      observe: 'في وضع «مراقبة فقط» يكتفي الذكاء الاصطناعي بالنظر إلى الشاشة — لا ينقر ولا يسحب ولا يكتب. اضغط «إيقاف» (⌘.) في أي وقت.',
+      assisted: 'في الوضع المساعَد ينتظر كل إجراء موافقتك قبل أن يلمس جهاز iPhone. اضغط «إيقاف» (⌘.) في أي وقت.',
+      supervised:
+        'في وضع الذكاء الاصطناعي ينفّذ الذكاء الاصطناعي الإجراءات دون أن يطلب موافقتك — تبقى التطبيقات المحظورة خارج النطاق، ولا يكتب في شاشات كلمات المرور والرموز، ولكل مهمة حدود لعدد الإجراءات والوقت. اضغط «إيقاف» (⌘.) في أي وقت.',
+    },
+  };
+  const cases = (['en', 'ar'] as const).flatMap((language) =>
+    (['observe', 'assisted', 'supervised'] as const).map((mode) => [language, mode] as const),
+  );
+
+  afterEach(() => setLanguage('en'));
+
+  it.each(cases)('%s, %s mode', (language, mode) => {
+    setLanguage(language);
+    act(() => {
+      appStore.setState((s) => reduceBootstrap(s, makeBootstrap({ settings: makeSettings((x) => {
+        x.permissions.controlMode = mode;
+      }) })));
+      setConnection({ socket: 'open' });
+    });
+    render(<ConversationView conversation={null} onCreated={vi.fn()} onChanged={vi.fn()} onDelete={vi.fn()} />);
+    expect(screen.getByText(SAFETY[language][mode])).toBeInTheDocument();
+    expect(screen.queryByText(/always ask for your approval|تطلب موافقتك دائمًا/)).not.toBeInTheDocument();
   });
 });

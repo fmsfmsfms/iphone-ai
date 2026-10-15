@@ -72,6 +72,7 @@ const DYNAMIC_FAMILIES: Record<string, string[]> = {
   'mode.{m}.point1': ['observe', 'assisted', 'supervised'],
   'mode.{m}.point2': ['observe', 'assisted', 'supervised'],
   'mode.{m}.point3': ['observe', 'assisted', 'supervised'],
+  'mode.{m}.safety': ['observe', 'assisted', 'supervised'],
   'permission.state.{m}': ['granted', 'denied', 'unknown'],
   'orientation.{m}': ['portrait', 'landscape'],
   'actor.{m}': ['user', 'ai', 'workflow', 'system', 'remote-user'],

@@ -97,7 +97,7 @@ registerMessages('live', {
     'assistant.approvals': 'Needs your approval',
     'assistant.task': 'Current task',
     'assistant.empty.title': 'What should the AI do?',
-    'assistant.empty.body': 'Describe a task, for example “Open Settings and turn on Dark Mode”. The AI follows your control mode and asks before sensitive actions.',
+    'assistant.empty.body': 'Describe a task, for example “Open Settings and turn on Dark Mode”. {rule}',
     'assistant.mode': 'Mode: {mode}',
 
     'panel.collapse': 'Collapse panel',
@@ -201,7 +201,7 @@ registerMessages('live', {
     'assistant.approvals': 'تحتاج إلى موافقتك',
     'assistant.task': 'المهمة الحالية',
     'assistant.empty.title': 'ماذا تريد من الذكاء الاصطناعي أن يفعل؟',
-    'assistant.empty.body': 'صف مهمة، مثل «افتح الإعدادات وفعّل الوضع الداكن». يلتزم الذكاء الاصطناعي بوضع التحكم ويطلب الإذن قبل الإجراءات الحساسة.',
+    'assistant.empty.body': 'صف مهمة، مثل «افتح الإعدادات وفعّل الوضع الداكن». {rule}',
     'assistant.mode': 'الوضع: {mode}',
 
     'panel.collapse': 'طي اللوحة',

@@ -33,6 +33,7 @@ function usedKeys(): Set<string> {
   for (const mode of ['observe', 'assisted', 'supervised']) {
     keys.add(`mode.${mode}.name`);
     keys.add(`mode.${mode}.description`);
+    keys.add(`mode.${mode}.safety`);
   }
   return keys;
 }
