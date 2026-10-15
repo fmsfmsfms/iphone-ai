@@ -16,6 +16,10 @@ import {
   type SensitiveRule,
 } from '@iphone-ai/shared';
 
+import { isReadableLabel } from './target.js';
+
+export { isReadableLabel };
+
 export interface PolicyTarget {
   /** Visible text of the element being acted on (from describe_screen), if known. */
   label: string | null;
@@ -325,6 +329,8 @@ export function evaluatePolicy(input: PolicyInput): PolicyDecision {
   const blocked = permissions.blockedApps;
   const rules = permissions.sensitiveRules;
   const targetLabel = input.target?.label?.trim() || null;
+  // OCR reads icons as stray glyphs ("a", "@", "X"): such a label does not make a target known.
+  const readableTarget = targetLabel && isReadableLabel(targetLabel) ? targetLabel : null;
   const screenTexts = input.context?.screenTexts ?? [];
 
   switch (action.kind) {
@@ -420,8 +426,8 @@ export function evaluatePolicy(input: PolicyInput): PolicyDecision {
         else d.approval(`sensitive.${hit.rule.id}`, text, 'high');
       }
     }
-    if (!targetLabel) d.note('target.unlabeled', 'The tap target has no readable label.', 'medium');
-    if (labels.length === 0) {
+    if (!readableTarget) d.note('target.unlabeled', 'The tap target has no readable label.', 'medium');
+    if (!labels.some(isReadableLabel)) {
       // A blind tap right next to sensitive or blocked text needs a human look.
       for (const label of uniqueLabels(input.target?.nearby ?? [])) {
         const app = matchesBlockedApp(label, blocked);
@@ -440,7 +446,7 @@ export function evaluatePolicy(input: PolicyInput): PolicyDecision {
       // Only a tap ON a readable, harmless label is safe; a row-band candidate (e.g. the
       // draft text next to an unlabeled send arrow) does not make the target known.
       const labelIsSafe =
-        targetLabel !== null &&
+        readableTarget !== null &&
         labels.every(
           (label) =>
             matchSensitiveRules(label, rules).length === 0 &&

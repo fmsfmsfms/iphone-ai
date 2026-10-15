@@ -42,7 +42,7 @@ import {
   type PolicyTarget,
 } from '../../policy/engine.js';
 import { detectBlockedForeground } from '../../policy/foreground.js';
-import { labelsAtPoint } from '../../policy/target.js';
+import { isReadableLabel, labelsAtPoint } from '../../policy/target.js';
 import type { ApprovalBroker } from '../../policy/approvals.js';
 import { downscaleForModel } from '../image.js';
 import type { ScreenshotStore } from '../screenshots.js';
@@ -817,12 +817,13 @@ export class AgentToolkit {
 
   /** What the policy is told the action touches, derived from an observation. */
   private policyTarget(action: DeviceAction, ref: TargetRef, observation: Observation): PolicyTarget {
-    if (ref.kind === 'element' && ref.label) return { label: ref.label };
+    if (ref.kind === 'element' && ref.label && isReadableLabel(ref.label)) return { label: ref.label };
     if (ref.kind === 'element' && 'x' in action) {
-      // An unlabeled icon (a chevron, an arrow button): the labels around it say
-      // what it does, checked like those of a coordinate tap at the same point.
+      // An unlabeled icon (a chevron, an arrow button) or one OCR read as a stray
+      // glyph ("a", ">"): the labels around it say what it does, checked like
+      // those of a coordinate tap at the same point.
       const hit = labelsAtPoint(observation.description.elements, action.x, action.y);
-      return { label: null, candidates: hit.candidates, nearby: hit.nearby };
+      return { label: ref.label, candidates: hit.candidates, nearby: hit.nearby };
     }
     if (ref.kind === 'point' && 'x' in action) {
       const hit = labelsAtPoint(observation.description.elements, action.x, action.y);
@@ -949,7 +950,7 @@ export class AgentToolkit {
       }
       // Every label the tap may hit tells the policy what is being touched.
       const hit = labelsAtPoint(observation.description.elements, args.x, args.y);
-      const near = hit.primary ?? hit.candidates[0] ?? null;
+      const near = [hit.primary, ...hit.candidates].find((l): l is string => !!l && isReadableLabel(l)) ?? hit.primary ?? hit.candidates[0] ?? null;
       return {
         x: args.x,
         y: args.y,

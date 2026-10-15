@@ -291,6 +291,24 @@ describe('commit after typing', () => {
     }
   });
 
+  it('treats a one-character OCR label as unlabeled (an icon read as "a", "@", "X")', () => {
+    // Real device: after a refused re-check the clear-search icon read as "a", and the same tap ran without approval.
+    for (const label of ['a', '@', 'X', 'ب', '1']) {
+      const d = evaluate({ label, context: typed });
+      expect(d.verdict, label).toBe('require_approval');
+      expect(d.rules, label).toEqual(['target.unlabeled', 'commit.after_typing']);
+    }
+    // Two letters or digits are readable.
+    expect(evaluate({ label: 'Wi', context: typed }).verdict).toBe('allow');
+    // A readable row candidate next to the glyph does not make the target itself known.
+    expect(evaluate({ target: { label: 'a', candidates: ['Notes'] }, context: typed }).rules).toEqual(['target.unlabeled', 'commit.after_typing']);
+  });
+
+  it('checks nearby labels when the only labels are unreadable glyphs', () => {
+    const d = evaluate({ target: { label: '@', candidates: ['a'], nearby: ['Delete Account'] } });
+    expect(d.rules).toContain('target.unlabeled_near_sensitive');
+  });
+
   it('allows a safe label after typing in supervised mode', () => {
     expect(evaluate({ label: 'Notes', context: typed }).verdict).toBe('allow');
     expect(evaluate({ label: 'Cancel Guest', context: typed }).verdict).toBe('allow');

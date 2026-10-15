@@ -137,15 +137,7 @@ export class ClaudeAgentSdkProvider implements LoopProvider {
       alwaysLoad: true,
       tools: request.tools.map((t) =>
         tool(t.name, t.description, t.zodShape as ZodRawShape, async (args: Record<string, unknown>) => {
-          const result = await t.execute(args);
-          return {
-            content: result.content.map((c) =>
-              c.type === 'text'
-                ? { type: 'text' as const, text: c.text }
-                : { type: 'image' as const, data: c.data, mimeType: c.mimeType },
-            ),
-            isError: result.isError,
-          };
+          return toCallToolResult(await t.execute(args));
         }),
       ),
     });
@@ -287,4 +279,30 @@ function describeAssistantError(code: string): string {
 
 export function claudeCodeWorkDir(dataDir: string): string {
   return path.join(dataDir, 'claude-code-session');
+}
+
+/**
+ * An iPhone tool result as an MCP CallToolResult. The Claude Code engine turns
+ * an isError result into an error built from its text parts only, so an error
+ * that carries a screenshot is sent as a normal result whose text starts with
+ * "ERROR:" (as the OpenAI-compatible provider does) — the model still sees the
+ * screen after the failure.
+ */
+export function toCallToolResult(result: { content: ModelContent[]; isError: boolean }): {
+  content: ({ type: 'text'; text: string } | { type: 'image'; data: string; mimeType: string })[];
+  isError: boolean;
+} {
+  const hasImage = result.content.some((c) => c.type === 'image');
+  const flagged = result.isError && hasImage;
+  const content = result.content.map((c) =>
+    c.type === 'text' ? { type: 'text' as const, text: c.text } : { type: 'image' as const, data: c.data, mimeType: c.mimeType },
+  );
+  if (flagged) {
+    const first = content.findIndex((c) => c.type === 'text');
+    if (first >= 0) {
+      const block = content[first] as { type: 'text'; text: string };
+      content[first] = { type: 'text', text: `ERROR: ${block.text}` };
+    } else content.unshift({ type: 'text', text: 'ERROR' });
+  }
+  return { content, isError: result.isError && !hasImage };
 }

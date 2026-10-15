@@ -270,6 +270,39 @@ describe('history conversion', () => {
   });
 });
 
+describe('error tool results with a screenshot', () => {
+  it('keeps is_error with text only and sends the screenshot after the tool results (the API rejects images in an error result)', async () => {
+    server.handle((_req, res) => sendSse(res, messageEvents([{ type: 'text', deltas: ['ok'] }], 'end_turn')));
+    const history: TurnMessage[] = [
+      { role: 'user', content: [{ type: 'text', text: 'Find burgers' }] },
+      { role: 'assistant', text: '', toolCalls: [{ id: 'toolu_s', name: 'scroll_to_text', args: { text: 'برجر' } }, { id: 'toolu_t', name: 'tap', args: {} }] },
+      {
+        role: 'tool_results',
+        results: [
+          {
+            callId: 'toolu_s',
+            name: 'scroll_to_text',
+            isError: true,
+            content: [{ type: 'text', text: "'برجر' not found after 10 scrolls." }, { type: 'image', mimeType: 'image/png', data: PNG_B64 }],
+          },
+          { callId: 'toolu_t', name: 'tap', isError: false, content: [{ type: 'text', text: 'Tapped.' }] },
+        ],
+      },
+    ];
+    await new AnthropicProvider(config(), 'k').runTurn(request(history));
+    const messages = server.requests[0]!.body!.messages as { role: string; content: unknown }[];
+    expect(messages[2]).toEqual({
+      role: 'user',
+      content: [
+        { type: 'tool_result', tool_use_id: 'toolu_s', is_error: true, content: [{ type: 'text', text: "'برجر' not found after 10 scrolls." }] },
+        { type: 'tool_result', tool_use_id: 'toolu_t', is_error: false, content: [{ type: 'text', text: 'Tapped.' }] },
+        { type: 'text', text: 'Tool output of the failed scroll_to_text call (toolu_s), the screen after it:' },
+        { type: 'image', source: { type: 'base64', media_type: 'image/png', data: PNG_B64 } },
+      ],
+    });
+  });
+});
+
 describe('error mapping', () => {
   const failWith = async (status: number, type: string): Promise<ProviderError> => {
     server.handle((_req, res) =>

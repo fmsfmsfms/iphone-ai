@@ -10,11 +10,11 @@ Three kinds of evidence are kept strictly apart:
 
 ## Automated suites
 
-Last full run: 2026-10-15, v0.5.1, with the official Node 22 toolchain (`source scripts/env.sh`).
+Last full run: 2026-10-15, v0.5.2, with the official Node 22 toolchain (`source scripts/env.sh`).
 
 | Suite | Command | Result |
 |---|---|---|
-| Backend unit + integration (MOCK) | `pnpm --filter @iphone-ai/server test` | 566 passed (41 files, incl. the real capture helper's --test-pattern against the backend parser, and approval re-checks replayed from recorded real-device screens) |
+| Backend unit + integration (MOCK) | `pnpm --filter @iphone-ai/server test` | 576 passed (43 files, incl. the real capture helper's --test-pattern against the backend parser, and approval re-checks replayed from recorded real-device screens) |
 | UI unit (jsdom) | `pnpm --filter @iphone-ai/web test` | 322 passed (33 files) |
 | Browser E2E (Playwright, MOCK backend + scripted model) | `pnpm test:e2e` | 24 passed (incl. the Live Control assistant panel: one scroller, approvals in view) |
 | Tauri shell (Rust) | `cd src-tauri && cargo test` | 21 passed; clippy and rustfmt clean |
@@ -125,6 +125,24 @@ The user still found swiping laggy; earlier viewer swipes took 3.1–4.3 s becau
 replayed at the user's own pace (up to 1.5 s). v0.5.1: viewer swipes replay as 0.3 s flicks,
 the AI's pause between repeated swipes is 0.3 s by default (0.8 s max), live view 15 fps.
 The approval re-check of v0.5.0 has not run on the device yet.
+
+**v0.5.1 on the real iPhone (2026-10-15):**
+
+- TikTok "scroll 6 videos": completed and verified on screen, **2.72 s per video** (was 3.9 s);
+  live view **15.0 fps** during video, nothing dropped.
+- **Approvals asked once:** a Jahez search needed 3 approvals; each was asked once and its tap
+  ran right after approval (the v0.4.0 double approvals are gone).
+- Defect: a failed `scroll_to_text` returned an error with a screenshot, and the Claude API
+  rejected the next request ("all content must be type `text` if `is_error` is true"), ending
+  the task. Fixed in v0.5.2 (error results text-only; the screenshot follows the results).
+- Defect (safety): after a refused re-check, the AI re-issued the same tap on a search-field icon
+  that OCR now read as "a"; one glyph counted as a readable label, so the commit-after-typing
+  approval was skipped. Fixed in v0.5.2: a label needs two letters or digits in a row, and a glyph
+  at the tap point no longer hides sensitive text in its row (replayed in
+  test/ai/glyph-labels.test.ts).
+- Two runs ended early because the iPhone unlocked mid-session (Face ID when picked up or looked
+  at): iPhone Mirroring logs "deviceUnlockedDuringSession". Resuming also asked for Mac
+  authentication (Touch ID / password), which the user must do.
 
 **Not yet verified on the real iPhone:**
 

@@ -24,6 +24,16 @@ export interface PointTargetOptions {
   nearbyRadius?: number;
 }
 
+/**
+ * A label with at least two letters or digits in a row (after dropping
+ * diacritics). OCR reads icons as stray glyphs ("a", "@", "X", "a b", "①②"),
+ * which must not make a tap target count as known.
+ */
+export function isReadableLabel(label: string): boolean {
+  const text = label.normalize('NFKC').replace(/\p{M}+/gu, '');
+  return /[\p{Lu}\p{Ll}\p{Lt}\p{Lo}\p{Nd}]{2,}/u.test(text);
+}
+
 export function labelsAtPoint(
   elements: readonly ScreenElement[],
   x: number,
@@ -35,12 +45,18 @@ export function labelsAtPoint(
     .map((e) => ({ e, d: Math.hypot(e.x - x, e.y - y) }))
     .sort((a, b) => a.d - b.d);
   const within = labelled.filter((c) => c.d <= radius).map((c) => c.e.label);
-  if (within.length > 0) return { primary: within[0]!, candidates: unique(within), nearby: [] };
+  if (within.some(isReadableLabel)) return { primary: within[0]!, candidates: unique(within), nearby: [] };
   // Fallback only: on the Home Screen a row band would pull in every icon of the grid row.
   const row = labelled
     .filter((c) => Math.abs(c.e.y - y) <= rowHalfHeight)
     .sort((a, b) => Math.abs(a.e.x - x) - Math.abs(b.e.x - x))
     .map((c) => c.e.label);
+  if (within.length > 0) {
+    // Only OCR glyphs at the point (an icon read as "a" or ">"): the row and the
+    // labels around it still say what the tap does (approval hints, never denials).
+    const around = labelled.filter((c) => c.d <= nearbyRadius).map((c) => c.e.label);
+    return { primary: within[0]!, candidates: unique(within), nearby: unique([...row, ...around]) };
+  }
   if (row.length > 0) return { primary: null, candidates: unique(row), nearby: [] };
   return { primary: null, candidates: [], nearby: unique(labelled.filter((c) => c.d <= nearbyRadius).map((c) => c.e.label)) };
 }

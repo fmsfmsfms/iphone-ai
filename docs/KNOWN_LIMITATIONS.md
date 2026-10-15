@@ -33,7 +33,8 @@
   as paused until they hide (usually 0.25–4 s, once ~6 s); input is refused meanwhile. Keep the pointer in
   iPhone AI while the AI works.
 - **The iPhone must stay locked.** iPhone Mirroring pauses or ends the session when the
-  iPhone is unlocked or used, and after a few idle minutes. Lock the iPhone, keep it
+  iPhone is unlocked or used (with Face ID, picking it up or looking at it unlocks it — keep it
+  face down), and after a few idle minutes. Resuming may ask for Touch ID or the Mac password. Lock the iPhone, keep it
   nearby, then resume.
 - **Paused phone.** When iPhone Mirroring is paused, screenshots and input
   would make Mirroir click "Resume"; iPhone AI waits for you instead (a Resume button is

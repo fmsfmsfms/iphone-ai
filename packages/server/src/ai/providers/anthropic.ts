@@ -22,6 +22,7 @@ import {
 
 type BetaMessageParam = Anthropic.Beta.Messages.BetaMessageParam;
 type BetaContentBlockParam = Anthropic.Beta.Messages.BetaContentBlockParam;
+type BetaImageBlockParam = Anthropic.Beta.Messages.BetaImageBlockParam;
 type BetaToolUnion = Anthropic.Beta.Messages.BetaToolUnion;
 
 /** Models that take `thinking: {type: "adaptive"}` (4.6 and later). */
@@ -165,23 +166,37 @@ export class AnthropicProvider implements TurnProvider {
           out.push({ role: 'assistant', content });
         }
       } else {
-        // All results for one assistant turn go back in a single user message.
-        out.push({
-          role: 'user',
-          content: m.results.map((r) => ({
+        // All results for one assistant turn go back in a single user message. The API
+        // accepts only text in a tool_result with is_error, so an error result's
+        // screenshot follows the tool_result blocks (which must come first) instead.
+        const image = (c: Extract<ModelContent, { type: 'image' }>): BetaImageBlockParam => ({
+          type: 'image',
+          source: { type: 'base64', media_type: c.mimeType as 'image/png', data: c.data },
+        });
+        const trailing: BetaContentBlockParam[] = [];
+        const results: BetaContentBlockParam[] = m.results.map((r) => {
+          const content = this.visible(r.content);
+          if (!r.isError) {
+            return {
+              type: 'tool_result' as const,
+              tool_use_id: r.callId,
+              is_error: false,
+              content: content.map((c) => (c.type === 'text' ? { type: 'text' as const, text: c.text } : image(c))),
+            };
+          }
+          const images = content.filter((c): c is Extract<ModelContent, { type: 'image' }> => c.type === 'image');
+          if (images.length > 0) {
+            trailing.push({ type: 'text', text: `Tool output of the failed ${r.name} call (${r.callId}), the screen after it:` }, ...images.map(image));
+          }
+          const texts = content.filter((c): c is Extract<ModelContent, { type: 'text' }> => c.type === 'text' && c.text.trim() !== '');
+          return {
             type: 'tool_result' as const,
             tool_use_id: r.callId,
-            is_error: r.isError,
-            content: this.visible(r.content).map((c) =>
-              c.type === 'text'
-                ? { type: 'text' as const, text: c.text }
-                : {
-                    type: 'image' as const,
-                    source: { type: 'base64' as const, media_type: c.mimeType as 'image/png', data: c.data },
-                  },
-            ),
-          })),
+            is_error: true,
+            content: texts.length > 0 ? texts.map((c) => ({ type: 'text' as const, text: c.text })) : [{ type: 'text' as const, text: '(error)' }],
+          };
         });
+        out.push({ role: 'user', content: [...results, ...trailing] });
       }
     }
     return out;
