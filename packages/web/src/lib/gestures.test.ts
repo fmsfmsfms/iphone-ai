@@ -8,6 +8,7 @@ import {
   flickAction,
   flickDirectionForKey,
   pointerGestureAction,
+  SWIPE_REPLAY_MAX_MS,
 } from './gestures';
 
 const from = { x: 205, y: 600 };
@@ -26,7 +27,7 @@ describe('pointerGestureAction', () => {
     expect(pointerGestureAction({ mode: 'long_press', from, to: from, travelPx: 2, elapsedMs: 9000 })).toMatchObject({ durationMs: 3000 });
   });
 
-  it('sends a drag as a Mirroir swipe with the user’s own points and speed (a click-drag in Long press mode)', () => {
+  it('sends a drag as a Mirroir swipe with the user’s own points, as a quick flick (a click-drag in Long press mode)', () => {
     expect(pointerGestureAction({ mode: 'tap', from, to, travelPx: 150, elapsedMs: 180 })).toEqual({
       kind: 'swipe',
       fromX: 205,
@@ -35,21 +36,23 @@ describe('pointerGestureAction', () => {
       toY: 300,
       durationMs: 180,
     });
-    // Slow drags are swipes too: Mirroir drops the momentum tail for slow ones.
-    expect(pointerGestureAction({ mode: 'double_tap', from, to, travelPx: 150, elapsedMs: 900 })).toMatchObject({ kind: 'swipe', durationMs: 900 });
+    // A slow drag is replayed as a quick flick: it only runs after release, so its own pace would just add lag.
+    expect(pointerGestureAction({ mode: 'double_tap', from, to, travelPx: 150, elapsedMs: 900 })).toMatchObject({ kind: 'swipe', durationMs: 300 });
     // Long press mode keeps the pointer click-drag (sliders); iOS scroll views ignore it.
     expect(pointerGestureAction({ mode: 'long_press', from, to, travelPx: 150, elapsedMs: 900 })).toMatchObject({ kind: 'drag', durationMs: 900 });
   });
 
-  it('clamps the drag duration to 60–1500 ms (whole milliseconds)', () => {
-    const drag = (elapsedMs: number) => pointerGestureAction({ mode: 'tap', from, to, travelPx: 50, elapsedMs });
-    expect([DRAG_MIN_MS, DRAG_MAX_MS]).toEqual([60, 1500]);
-    expect(drag(12)).toMatchObject({ durationMs: 60 });
-    expect(drag(60)).toMatchObject({ durationMs: 60 });
-    expect(drag(212.6)).toMatchObject({ durationMs: 213 });
+  it('clamps swipes to 60–300 ms and Long press click-drags to 60–1500 ms (whole milliseconds)', () => {
+    const swipe = (elapsedMs: number) => pointerGestureAction({ mode: 'tap', from, to, travelPx: 50, elapsedMs });
+    const drag = (elapsedMs: number) => pointerGestureAction({ mode: 'long_press', from, to, travelPx: 50, elapsedMs });
+    expect([DRAG_MIN_MS, SWIPE_REPLAY_MAX_MS, DRAG_MAX_MS]).toEqual([60, 300, 1500]);
+    expect(swipe(12)).toMatchObject({ durationMs: 60 });
+    expect(swipe(212.6)).toMatchObject({ durationMs: 213 });
+    expect(swipe(1500)).toMatchObject({ durationMs: 300 });
+    expect(swipe(Number.NaN)).toMatchObject({ durationMs: 60 });
+    expect(drag(60)).toMatchObject({ kind: 'drag', durationMs: 60 });
     expect(drag(1500)).toMatchObject({ durationMs: 1500 });
     expect(drag(4200)).toMatchObject({ durationMs: 1500 });
-    expect(drag(Number.NaN)).toMatchObject({ durationMs: 60 });
   });
 
   it('sends nothing for a drag whose end could not be mapped', () => {

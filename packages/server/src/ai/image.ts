@@ -33,6 +33,8 @@ export interface DownscaleOptions {
   /** Path of sips (tests). */
   sipsPath?: string;
   timeoutMs?: number;
+  /** Where the temporary working folder is created (default: the system temp directory; tests). */
+  tempRoot?: string;
 }
 
 const SIPS = '/usr/bin/sips';
@@ -47,7 +49,7 @@ export async function downscaleForModel(base64Png: string, opts: DownscaleOption
 
   let dir: string | null = null;
   try {
-    dir = await mkdtemp(path.join(os.tmpdir(), 'iphone-ai-img-'));
+    dir = await mkdtemp(path.join(opts.tempRoot ?? os.tmpdir(), 'iphone-ai-img-'));
     const input = path.join(dir, 'in.png');
     const output = path.join(dir, 'out.jpg');
     await writeFile(input, Buffer.from(base64Png, 'base64'), { mode: 0o600 });

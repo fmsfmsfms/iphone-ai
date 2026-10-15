@@ -59,6 +59,13 @@ const MIGRATIONS: readonly { id: string; apply(settings: AppSettings): void }[] 
       }
     },
   },
+  {
+    // 0.5.1: the live view defaults to 15 fps (10 looked choppy during feed transitions).
+    id: '2026-10-live-fps-15',
+    apply(settings) {
+      if (settings.connection.screenshot.liveFps === 10) settings.connection.screenshot.liveFps = DEFAULT_LIVE_FPS;
+    },
+  },
 ];
 
 type SettingsListener = (next: AppSettings, previous: AppSettings) => void;

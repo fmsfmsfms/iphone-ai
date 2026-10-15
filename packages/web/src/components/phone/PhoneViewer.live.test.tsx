@@ -191,7 +191,7 @@ describe('drag gestures', () => {
     });
   });
 
-  it('clamps quick flicks to 60 ms and slow drags to 1500 ms', async () => {
+  it('clamps quick flicks to 60 ms and replays slow drags as 300 ms flicks', async () => {
     const { bodies } = actionRoute();
     render(<PhoneViewer interactive toolbar />);
     await deliver(1);
@@ -210,7 +210,7 @@ describe('drag gestures', () => {
 
     expect(bodies.map((b) => (b as { action: unknown }).action)).toEqual([
       { kind: 'swipe', fromX: 100, fromY: 700, toX: 110, toY: 200, durationMs: 60 },
-      { kind: 'swipe', fromX: 300, fromY: 200, toX: 300, toY: 890, durationMs: 1500 },
+      { kind: 'swipe', fromX: 300, fromY: 200, toX: 300, toY: 890, durationMs: 300 },
     ]);
   });
 

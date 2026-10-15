@@ -539,7 +539,7 @@ describe('LiveCapture lifecycle (fake helper)', () => {
     live.start();
     await waitFor(() => lines.some((l) => l.msg.startsWith('Live capture stats:')), { message: 'no stats line' });
     const info = lines.filter((l) => l.level === 'info').map((l) => l.msg);
-    expect(info).toContain('Live capture started (ScreenCaptureKit, 730x1600 px, 10 fps)');
+    expect(info).toContain('Live capture started (ScreenCaptureKit, 730x1600 px, 15 fps)');
     expect(info.find((m) => m.startsWith('Live capture stats:'))).toMatch(/^Live capture stats: fps=\d+(\.\d)?, avgLatencyMs=\d+, frames=\d+$/);
     await waitFor(() => helper.log().some((e) => e.event === 'crash'));
     await waitFor(() => lines.some((l) => l.level === 'info' && l.msg.startsWith('Live capture unavailable: the live capture helper exited unexpectedly (code 1)')));

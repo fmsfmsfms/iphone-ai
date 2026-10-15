@@ -5,8 +5,8 @@ import type { AppSettings, SensitiveRule } from './settings.js';
 
 export const DEFAULT_MIRROIR_BINARY = '/opt/homebrew/bin/mirroir';
 
-/** Default frame rate of the ScreenCaptureKit live capture helper. */
-export const DEFAULT_LIVE_FPS = 10;
+/** Default frame rate of the ScreenCaptureKit live capture helper (the most the helper takes). */
+export const DEFAULT_LIVE_FPS = 15;
 export const MIN_LIVE_FPS = 5;
 /**
  * Highest live frame rate. The helper takes single window screenshots (the

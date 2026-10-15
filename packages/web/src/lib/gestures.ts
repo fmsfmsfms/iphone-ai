@@ -17,6 +17,13 @@ export type TouchMode = 'tap' | 'long_press' | 'double_tap';
 
 /** A swipe or drag shorter than this is still sent as 60 ms (Mirroir needs a few frames). */
 export const DRAG_MIN_MS = 60;
+/**
+ * A swipe is replayed after the pointer is released, so replaying a slow drag
+ * at its own speed only adds lag: swipes are sent as quick flicks (Mirroir's
+ * default duration, which gets momentum and pages feeds) in the user's
+ * direction and distance.
+ */
+export const SWIPE_REPLAY_MAX_MS = 300;
 /** Slower gestures are capped so one gesture never holds the device lane for long. */
 export const DRAG_MAX_MS = 1500;
 export const LONG_PRESS_MIN_MS = 500;
@@ -65,7 +72,7 @@ export function pointerGestureAction(gesture: PointerGesture): DeviceAction | nu
     fromY: from.y,
     toX: to.x,
     toY: to.y,
-    durationMs: clampDuration(elapsedMs, DRAG_MIN_MS, DRAG_MAX_MS),
+    durationMs: clampDuration(elapsedMs, DRAG_MIN_MS, mode === 'long_press' ? DRAG_MAX_MS : SWIPE_REPLAY_MAX_MS),
   };
 }
 

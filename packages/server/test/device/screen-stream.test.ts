@@ -206,7 +206,7 @@ describe('ScreenStream with live capture', () => {
     expect(s.stats()).toMatchObject({
       mode: 'live-screencapturekit',
       running: true,
-      targetFps: 10,
+      targetFps: 15,
       pausedReason: 'Live capture active',
       liveAvailable: true,
       liveError: null,

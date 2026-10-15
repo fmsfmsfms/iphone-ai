@@ -164,7 +164,7 @@ describe('AI swipe tool', () => {
     const def = makeKit().kit.toolDefs().find((t) => t.name === 'swipe')!;
     const props = (def.parameters as { properties: Record<string, { minimum?: number; maximum?: number }> }).properties;
     expect(props.times).toMatchObject({ minimum: 1, maximum: 10 });
-    expect(props.interval_ms).toMatchObject({ minimum: 300, maximum: 3000 });
+    expect(props.interval_ms).toMatchObject({ minimum: 300, maximum: 800 });
     expect(def.description).toMatch(/momentum/i);
     const prompt = agentSystemPrompt({ mode: 'supervised', maxActions: 25, vision: true, tools: ['swipe'] });
     expect(prompt).toMatch(/swipe scrolls across the middle of the screen with flick momentum/);

@@ -149,7 +149,13 @@ const SHAPES = {
       .max(10)
       .optional()
       .describe('Repeat the swipe this many times (1–10, default 1), e.g. to page through several videos or screens. One observation is returned after the last swipe.'),
-    interval_ms: z.number().int().min(300).max(3000).optional().describe('Pause between repeated swipes in milliseconds (300–3000, default 300).'),
+    interval_ms: z
+      .number()
+      .int()
+      .min(300)
+      .max(800)
+      .optional()
+      .describe('Pause between repeated swipes in milliseconds (300–800, default 300). Keep the default: each swipe already waits for the page to settle.'),
     reason,
   },
   type_text: {
@@ -186,7 +192,7 @@ const DESCRIPTIONS: Record<ToolName, string> = {
   double_tap: 'Double-tap an element or point (e.g. to zoom or select a word).',
   long_press: 'Press and hold an element or point (context menus, Quick Actions).',
   swipe:
-    'Swipe across the middle of the screen with flick momentum (about 1.5 s each). "up" moves the finger up (scrolls down the page; next video in TikTok, Reels or Shorts). Use for scrolling and paging. With times > 1 it swipes repeatedly (interval_ms apart) and returns one observation after the last swipe.',
+    'Swipe across the middle of the screen with flick momentum (about 2.5 s each). "up" moves the finger up (scrolls down the page; next video in TikTok, Reels or Shorts). Use for scrolling and paging. With times > 1 it swipes repeatedly (interval_ms apart) and returns one observation after the last swipe.',
   type_text:
     'Type text into the currently focused text field (tap the field first). Never use for passwords, passcodes or codes. Do not include line breaks; use press_key "return" to submit.',
   press_key: 'Press a key: return (submit/search), delete (backspace), escape, tab, space or arrows.',
@@ -521,7 +527,7 @@ export class AgentToolkit {
       if (!geometry) return errorResult('The screen size is unknown; call observe_screen first.');
       action = swipeAction(args.direction as SwipeDirection, (args.distance as SwipeDistance | undefined) ?? 'medium', geometry.widthPt, geometry.heightPt);
       repeat = typeof args.times === 'number' ? Math.min(10, Math.max(1, Math.round(args.times))) : 1;
-      intervalMs = typeof args.interval_ms === 'number' ? Math.min(3000, Math.max(300, Math.round(args.interval_ms))) : DEFAULT_SWIPE_INTERVAL_MS;
+      intervalMs = typeof args.interval_ms === 'number' ? Math.min(800, Math.max(300, Math.round(args.interval_ms))) : DEFAULT_SWIPE_INTERVAL_MS;
       targetDescription = `${String(args.direction)} (${String(args.distance ?? 'medium')})${repeat > 1 ? ` ×${repeat}` : ''}`;
     } else if (name === 'type_text') {
       action = { kind: 'type_text', text: String(args.text) };

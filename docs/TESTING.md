@@ -10,11 +10,11 @@ Three kinds of evidence are kept strictly apart:
 
 ## Automated suites
 
-Last full run: 2026-10-15, v0.5.0, with the official Node 22 toolchain (`source scripts/env.sh`).
+Last full run: 2026-10-15, v0.5.1, with the official Node 22 toolchain (`source scripts/env.sh`).
 
 | Suite | Command | Result |
 |---|---|---|
-| Backend unit + integration (MOCK) | `pnpm --filter @iphone-ai/server test` | 565 passed (41 files, incl. the real capture helper's --test-pattern against the backend parser, and approval re-checks replayed from recorded real-device screens) |
+| Backend unit + integration (MOCK) | `pnpm --filter @iphone-ai/server test` | 566 passed (41 files, incl. the real capture helper's --test-pattern against the backend parser, and approval re-checks replayed from recorded real-device screens) |
 | UI unit (jsdom) | `pnpm --filter @iphone-ai/web test` | 322 passed (33 files) |
 | Browser E2E (Playwright, MOCK backend + scripted model) | `pnpm test:e2e` | 24 passed (incl. the Live Control assistant panel: one scroller, approvals in view) |
 | Tauri shell (Rust) | `cd src-tauri && cargo test` | 21 passed; clippy and rustfmt clean |
@@ -116,6 +116,15 @@ and unified logs:**
   settings by a migration).
 - Live-view safety net: probes only within 8 s of capture start, measured from the onset and
   never reopened by later reconnects; latches only on a second strike in a later helper session.
+
+**v0.5.0 on the real iPhone (2026-10-15):** two TikTok runs, 20 swipes all delivered (2.4 s each
+inside Mirroir; the AI paused 1.5 s between them, ≈3.9 s per video). The live view stayed on at
+9–10 fps through a real pause (no false switch-off). That pause was genuine — iPhone Mirroring
+logged "deviceUnlockedDuringSession" — and the AI stopped safely with the lock-and-Resume advice.
+The user still found swiping laggy; earlier viewer swipes took 3.1–4.3 s because a drag was
+replayed at the user's own pace (up to 1.5 s). v0.5.1: viewer swipes replay as 0.3 s flicks,
+the AI's pause between repeated swipes is 0.3 s by default (0.8 s max), live view 15 fps.
+The approval re-check of v0.5.0 has not run on the device yet.
 
 **Not yet verified on the real iPhone:**
 

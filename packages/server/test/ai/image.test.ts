@@ -2,7 +2,6 @@
 // re-encoded as JPEG; any failure falls back to the original PNG.
 
 import { readdirSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { deflateSync } from 'node:zlib';
 
@@ -52,18 +51,19 @@ function png(width: number, height: number): string {
   return Buffer.concat([signature, chunk('IHDR', ihdr), chunk('IDAT', deflateSync(raw)), chunk('IEND', Buffer.alloc(0))]).toString('base64');
 }
 
-const tempEntries = () => readdirSync(tmpdir()).filter((n) => n.startsWith('iphone-ai-img-')).length;
+// Each test gets its own temp root: other test workers downscale screenshots in the shared temp directory at the same time.
+const tempEntries = (root: string) => readdirSync(root).filter((n) => n.startsWith('iphone-ai-img-')).length;
 
 describe.runIf(process.platform === 'darwin')('downscaleForModel (macOS sips)', () => {
   it('resizes a full-size screenshot to at most 1400 px and re-encodes it as JPEG', async () => {
-    const before = tempEntries();
-    const out = await downscaleForModel(png(820, 1796));
+    const tempRoot = makeTempDir();
+    const out = await downscaleForModel(png(820, 1796), { tempRoot });
     expect(out.mimeType).toBe('image/jpeg');
     expect(Math.max(out.width!, out.height!)).toBe(1400);
     expect(out.width).toBeGreaterThan(600);
     expect(jpegDimensions(Buffer.from(out.data, 'base64'))).toEqual({ width: out.width, height: out.height });
     // Temporary files are removed.
-    expect(tempEntries()).toBe(before);
+    expect(tempEntries(tempRoot)).toBe(0);
   });
 
   it('never enlarges a small image', async () => {

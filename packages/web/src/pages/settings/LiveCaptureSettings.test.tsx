@@ -46,7 +46,7 @@ describe('live view settings', () => {
   it('shows the switch, the frame rate and why live capture is unavailable', async () => {
     render(<SettingsPage section="connection" />);
     expect(screen.getByRole('switch', { name: /Live view \(ScreenCaptureKit\)/ })).toBeChecked();
-    expect(screen.getByRole('textbox', { name: 'Live frame rate' })).toHaveValue('10');
+    expect(screen.getByRole('textbox', { name: 'Live frame rate' })).toHaveValue('15');
     expect(screen.getByText('Live capture unavailable — screenshots are polled instead')).toBeInTheDocument();
     expect(screen.getByText('Capture helper not installed')).toBeInTheDocument();
     await act(async () => Promise.resolve());
@@ -96,8 +96,12 @@ describe('live view settings', () => {
     await userEvent.tab();
     // The field clamps to its range; a valid value is saved as a whole number.
     expect(field).toHaveValue('15');
+    await userEvent.clear(field);
+    await userEvent.type(field, '4');
+    await userEvent.tab();
+    expect(field).toHaveValue('5');
     await userEvent.click(await screen.findByRole('button', { name: /^save/i }));
     await waitFor(() => expect(puts()).toHaveLength(1));
-    expect(puts()[0].connection.screenshot.liveFps).toBe(15);
+    expect(puts()[0].connection.screenshot.liveFps).toBe(5);
   });
 });

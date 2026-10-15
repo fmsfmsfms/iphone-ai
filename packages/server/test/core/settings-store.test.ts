@@ -83,10 +83,10 @@ describe('update', () => {
     expect(next.connection.target).toBe('iphone');
   });
 
-  it('defaults to live capture at 10 fps, accepts 5–60 from older clients and stores at most 15 (single-screenshot capture)', () => {
-    expect(DEFAULT_LIVE_FPS).toBe(10);
+  it('defaults to live capture at 15 fps, accepts 5–60 from older clients and stores at most 15 (single-screenshot capture)', () => {
+    expect(DEFAULT_LIVE_FPS).toBe(15);
     expect(MAX_LIVE_FPS).toBe(15);
-    expect(ctx.settings.get().connection.screenshot).toMatchObject({ liveCapture: true, liveFps: 10 });
+    expect(ctx.settings.get().connection.screenshot).toMatchObject({ liveCapture: true, liveFps: 15 });
     const screenshot = ctx.settings.get().connection.screenshot;
     expect(() => ctx.settings.update({ connection: { screenshot: { ...screenshot, liveFps: 61 } } })).toThrow(ZodError);
     expect(() => ctx.settings.update({ connection: { screenshot: { ...screenshot, liveFps: 4 } } })).toThrow(ZodError);
@@ -198,11 +198,11 @@ describe('persistence', () => {
       idleAfterMs: 20000,
       pauseWhenHidden: false,
       liveCapture: true,
-      liveFps: 10,
+      liveFps: 15,
     });
   });
 
-  it('migrates the live frame rate once: the old 30 fps default → 10, anything above 15 → 15, custom values kept', () => {
+  it('migrates the live frame rate once: the old 30 fps default → 15, anything above 15 → 15, custom values kept', () => {
     // A database written by 0.2.0: only the earlier migration was recorded.
     const storeLiveFps = (liveFps: number) => {
       const old = createDefaultSettings();
@@ -212,9 +212,9 @@ describe('persistence', () => {
     };
 
     storeLiveFps(30);
-    expect(new SettingsStore(ctx.db).get().connection.screenshot.liveFps).toBe(10);
+    expect(new SettingsStore(ctx.db).get().connection.screenshot.liveFps).toBe(15);
     // Persisted, not only applied in memory.
-    expect(storedRow(ctx.db).connection.screenshot.liveFps).toBe(10);
+    expect(storedRow(ctx.db).connection.screenshot.liveFps).toBe(15);
 
     storeLiveFps(60);
     expect(new SettingsStore(ctx.db).get().connection.screenshot.liveFps).toBe(15);
@@ -233,6 +233,24 @@ describe('persistence', () => {
     later.connection.screenshot.liveFps = 30;
     ctx.db.run("UPDATE settings SET value = ? WHERE key = 'app'", JSON.stringify(later));
     expect(new SettingsStore(ctx.db).get().connection.screenshot.liveFps).toBe(15);
+  });
+
+  it('moves a live frame rate still on the 0.3–0.5 default (10 fps) to 15 once, keeping custom values', () => {
+    const store = (liveFps: number, done: string[]) => {
+      const old = createDefaultSettings();
+      old.connection.screenshot.liveFps = liveFps;
+      ctx.db.run("UPDATE settings SET value = ? WHERE key = 'app'", JSON.stringify(old));
+      ctx.db.run("UPDATE settings SET value = ? WHERE key = 'migrations'", JSON.stringify(done));
+    };
+    const before = ['2026-10-faster-observation', '2026-10-live-snapshot-fps', '2026-10-payment-keywords'];
+    store(10, before);
+    expect(new SettingsStore(ctx.db).get().connection.screenshot.liveFps).toBe(15);
+    expect(storedRow(ctx.db).connection.screenshot.liveFps).toBe(15);
+    store(8, before);
+    expect(new SettingsStore(ctx.db).get().connection.screenshot.liveFps).toBe(8);
+    // Once recorded, a 10 chosen later is the user's choice.
+    store(10, [...before, '2026-10-live-fps-15']);
+    expect(new SettingsStore(ctx.db).get().connection.screenshot.liveFps).toBe(10);
   });
 
   it('migrates users still on the old defaults (settle 900 → 450 ms, timeout 60 → 30 s) once, keeping custom values', () => {
