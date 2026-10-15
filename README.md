@@ -234,7 +234,7 @@ pnpm dev
 
 - جهاز Mac بمعالج **Apple silicon** ونظام **macOS 15** أو أحدث، مع إعداد ميزة **النسخ المتطابق لـ iPhone**
   (بشروط Apple: الهاتف مقفل وقريب، ونفس حساب Apple، وWi-Fi وBluetooth مفعّلان).
-- تثبيت **[Mirroir](https://mirroir.dev/)** في المسار `/opt/homebrew/bin/mirroir`.
+- تثبيت **[Mirroir](https://mirroir.dev/)** في المسار <code dir="ltr">/opt/homebrew/bin/mirroir</code>.
 - منح iPhone AI أذونات **تسجيل الشاشة** و**تسهيلات الاستخدام** و**الأتمتة ← System Events** (تُطلب عند أول استخدام).
 - للذكاء الاصطناعي: مفتاح Anthropic أو OpenAI API، أو تسجيل الدخول في Claude Code، أو خادم محلي
   متوافق مع OpenAI مثل LM Studio أو Ollama.
