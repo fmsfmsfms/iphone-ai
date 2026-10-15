@@ -1,6 +1,7 @@
 // MirroirManager lifecycle regressions: overlapping stop/restart calls,
-// startup-failure backoff, a crash during tools/list and a workspace that
-// cannot be written. Mock Mirroir and throw-away stub servers only.
+// startup-failure backoff, a crash during tools/list, a workspace that
+// cannot be written and exits during app shutdown. Mock Mirroir and
+// throw-away stub servers only.
 
 import { chmodSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
@@ -35,6 +36,10 @@ function alive(pid: number): boolean {
 
 function startedPids(c: DeviceContext): number[] {
   return c.readMockLog().filter((e) => e.event === 'start' && typeof e.pid === 'number').map((e) => e.pid!);
+}
+
+function connectionTypes(c: DeviceContext): string[] {
+  return c.activity.query({ categories: ['connection'] }).map((e) => e.type);
 }
 
 function stubManager(c: DeviceContext, args: string[], autoRestart: boolean): MirroirManager {
@@ -143,9 +148,10 @@ rl.on('line', (line) => {
     expect(states).not.toContain('ready');
     expect(manager.info().state).toBe('crashed');
     expect(manager.isReady()).toBe(false);
-    const types = ctx.activity.query({ categories: ['connection'] }).map((e) => e.type);
-    expect(types).toContain('mcp.exited');
-    expect(types).not.toContain('mcp.started');
+    // The crash row follows after the exit-report grace period.
+    const c = ctx;
+    await waitFor(() => connectionTypes(c).includes('mcp.exited'), { message: 'crash never reported' });
+    expect(connectionTypes(c)).not.toContain('mcp.started');
   });
 
   it('reports a workspace that cannot be written as crashed instead of rejecting start()', async () => {
@@ -162,5 +168,80 @@ rl.on('line', (line) => {
     expect(c.mirroir.info().state).toBe('crashed');
     expect(c.mirroir.info().lastError).toMatch(/^Could not write the Mirroir workspace: /);
     expect(c.mirroir.isReady()).toBe(false);
+  });
+});
+
+// Quitting the desktop app SIGTERMs the backend's whole process group, so the
+// SIGTERM reaches Mirroir at the same moment as the backend (main.ts calls
+// beginShutdown() first thing). Here the signal is sent to the mock directly.
+describe('app shutdown', () => {
+  it('an exit after beginShutdown() is part of the close: no crash row, no restart', async () => {
+    ctx = await createDeviceContext();
+    const c = ctx;
+    const states: McpServerState[] = [];
+    c.mirroir.on('state', (info: { state: McpServerState }) => states.push(info.state));
+    const pid = c.mirroir.info().pid!;
+
+    c.mirroir.beginShutdown();
+    process.kill(pid, 'SIGTERM');
+    await waitFor(() => c.mirroir.info().state === 'stopped', { message: 'exit not seen' });
+    await sleep(1300); // past the exit-report grace period
+    expect(states).not.toContain('crashed');
+    expect(c.mirroir.info()).toMatchObject({ state: 'stopped', pid: null, lastError: null });
+    expect(connectionTypes(c)).not.toContain('mcp.exited');
+
+    // Nothing restarts it while the app closes; main.ts still terminates afterwards.
+    await c.mirroir.start();
+    expect(c.mirroir.info().state).toBe('stopped');
+    await c.mirroir.terminate('iPhone AI is closing');
+    expect(c.mirroir.info()).toMatchObject({ state: 'stopped', lastError: 'iPhone AI is closing' });
+    expect(startedPids(c)).toHaveLength(1);
+  });
+
+  it('an exit that arrives just before the backend handles its own SIGTERM is not reported', async () => {
+    ctx = await createDeviceContext();
+    const c = ctx;
+    const pid = c.mirroir.info().pid!;
+
+    process.kill(pid, 'SIGTERM'); // Mirroir handled the group SIGTERM first…
+    await waitFor(() => c.mirroir.info().state === 'crashed', { message: 'exit not seen' });
+    c.mirroir.beginShutdown(); // …and the backend's handler ran a moment later.
+    expect(c.mirroir.info()).toMatchObject({ state: 'stopped', lastError: null });
+
+    await sleep(2500); // past the grace period and the 2 s restart backoff
+    expect(connectionTypes(c)).not.toContain('mcp.exited');
+    expect(c.mirroir.info().state).toBe('stopped');
+    expect(startedPids(c)).toHaveLength(1);
+  });
+
+  it('an exit outside shutdown is still reported as a crash and restarted', async () => {
+    ctx = await createDeviceContext();
+    const c = ctx;
+    const pid = c.mirroir.info().pid!;
+
+    process.kill(pid, 'SIGTERM');
+    await waitFor(() => c.mirroir.info().state === 'crashed', { message: 'exit not seen' });
+    expect(c.mirroir.info().lastError).toMatch(/exited unexpectedly/);
+    await waitFor(() => connectionTypes(c).includes('mcp.exited'), { message: 'crash never reported' });
+    const row = c.activity.query({ categories: ['connection'] }).find((e) => e.type === 'mcp.exited');
+    expect(row).toMatchObject({ severity: 'warning', summary: 'The Mirroir MCP server exited unexpectedly. Reconnecting…' });
+    await waitFor(() => c.mirroir.isReady(), { timeoutMs: 15000, message: 'never restarted' });
+    expect(startedPids(c)).toHaveLength(2);
+  });
+
+  it('stop() or terminate() right after a crash still records it', async () => {
+    ctx = await createDeviceContext();
+    const c = ctx;
+
+    process.kill(c.mirroir.info().pid!, 'SIGTERM');
+    await waitFor(() => c.mirroir.info().state === 'crashed', { message: 'exit not seen' });
+    await c.mirroir.stop();
+    expect(connectionTypes(c).filter((t) => t === 'mcp.exited')).toHaveLength(1);
+
+    await c.mirroir.start();
+    process.kill(c.mirroir.info().pid!, 'SIGTERM');
+    await waitFor(() => c.mirroir.info().state === 'crashed', { message: 'second exit not seen' });
+    await c.mirroir.terminate('emergency stop');
+    expect(connectionTypes(c).filter((t) => t === 'mcp.exited')).toHaveLength(2);
   });
 });

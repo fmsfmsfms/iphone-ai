@@ -1,6 +1,6 @@
 {
   "name": "iphone-ai",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "private": true,
   "description": "iPhone AI \u2014 monitor and control a physical iPhone from macOS through Mirroir MCP, manual controls, and AI agents.",
   "license": "UNLICENSED",

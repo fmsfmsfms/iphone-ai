@@ -174,6 +174,9 @@ async function main(): Promise<void> {
   const shutdown = async (reason: string) => {
     if (shuttingDown) return;
     shuttingDown = true;
+    // Before any await: the desktop app SIGTERMs our whole process group, so
+    // Mirroir may exit while we wait for the capture helper below.
+    mirroir.beginShutdown();
     log.info('Shutting down', { reason });
     const active = agents.activeTask();
     if (active) agents.cancelTask(active.id, 'iPhone AI is closing.');

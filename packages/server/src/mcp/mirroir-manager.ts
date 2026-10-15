@@ -57,6 +57,14 @@ const MAX_LINE_BYTES = 64 * 1024 * 1024;
 const STDERR_RING = 300;
 /** An instance that stayed up this long resets the crash backoff. */
 const STABLE_UPTIME_MS = 60_000;
+/**
+ * An unexpected exit is reported (activity row, warning) only after this long.
+ * Quitting the desktop app SIGTERMs the backend's whole process group, so
+ * Mirroir can exit a moment before our own SIGTERM / stdin-EOF handler runs;
+ * beginShutdown() drops a report still waiting here instead of logging the
+ * close as a crash.
+ */
+const EXIT_REPORT_GRACE_MS = 1000;
 
 export interface MirroirManagerOptions {
   paths: AppPaths;
@@ -66,6 +74,8 @@ export interface MirroirManagerOptions {
   /** Override for tests (e.g. the mock server: process.execPath + script). */
   command?: { command: string; args: string[] } | null;
   autoRestart?: boolean;
+  /** Override for tests (default EXIT_REPORT_GRACE_MS). */
+  exitReportGraceMs?: number;
 }
 
 export class MirroirManager extends EventEmitter {
@@ -82,7 +92,9 @@ export class MirroirManager extends EventEmitter {
   private tools: McpToolInfo[] = [];
   private readonly stderrLines: string[] = [];
   private intentionalClose = false;
+  private shuttingDown = false;
   private restartTimer: NodeJS.Timeout | null = null;
+  private exitReportTimer: NodeJS.Timeout | null = null;
   private startPromise: Promise<void> | null = null;
   private restartPromise: Promise<void> | null = null;
   private configFingerprint: string | null = null;
@@ -134,7 +146,7 @@ export class MirroirManager extends EventEmitter {
 
   /** Writes workspace config and starts the server if it is not running. Idempotent. */
   async start(): Promise<void> {
-    if (this.isReady()) return;
+    if (this.isReady() || this.shuttingDown) return;
     if (this.startPromise) return this.startPromise;
     this.startPromise = this.doStart().finally(() => {
       this.startPromise = null;
@@ -269,7 +281,7 @@ export class MirroirManager extends EventEmitter {
 
   private handleClose(transport: StdioClientTransport): void {
     if (this.transport !== transport) return;
-    const wasIntentional = this.intentionalClose;
+    const wasIntentional = this.intentionalClose || this.shuttingDown;
     this.client = null;
     this.transport = null;
     this.pid = null;
@@ -282,6 +294,19 @@ export class MirroirManager extends EventEmitter {
     this.consecutiveCrashes = uptime >= STABLE_UPTIME_MS ? 1 : this.consecutiveCrashes + 1;
     const tail = this.stderrLines.slice(-3).join(' | ');
     this.setState('crashed', `Mirroir MCP server exited unexpectedly${tail ? `: ${tail}` : ''}`);
+    this.emit('exit', { intentional: false });
+    this.scheduleRestart();
+    // An earlier exit still waiting is reported now, so none is lost.
+    this.flushExitReport();
+    this.exitReportTimer = setTimeout(() => this.flushExitReport(), this.opts.exitReportGraceMs ?? EXIT_REPORT_GRACE_MS);
+    this.exitReportTimer.unref();
+  }
+
+  /** Records the pending unexpected-exit report, if any. */
+  private flushExitReport(): void {
+    if (!this.exitReportTimer) return;
+    clearTimeout(this.exitReportTimer);
+    this.exitReportTimer = null;
     this.log.warn('Mirroir MCP server exited unexpectedly');
     this.opts.activity.record({
       category: 'connection',
@@ -290,8 +315,27 @@ export class MirroirManager extends EventEmitter {
       severity: 'warning',
       summary: 'The Mirroir MCP server exited unexpectedly. Reconnecting…',
     });
-    this.emit('exit', { intentional: false });
-    this.scheduleRestart();
+  }
+
+  /**
+   * Called first thing when the backend closes. The desktop app SIGTERMs our
+   * whole process group, so Mirroir may already be exiting: from here on an
+   * exit is part of the close (never reported as a crash, never restarted),
+   * and an exit that arrived just before we got the signal is not reported
+   * either. terminate() still runs afterwards to stop Mirroir.
+   */
+  beginShutdown(): void {
+    this.shuttingDown = true;
+    if (this.restartTimer) {
+      clearTimeout(this.restartTimer);
+      this.restartTimer = null;
+    }
+    if (this.exitReportTimer) {
+      clearTimeout(this.exitReportTimer);
+      this.exitReportTimer = null;
+      this.log.info('Mirroir MCP server exited as iPhone AI was closing');
+      this.setState('stopped', null);
+    }
   }
 
   private scheduleRestart(): void {
@@ -311,6 +355,7 @@ export class MirroirManager extends EventEmitter {
       clearTimeout(this.restartTimer);
       this.restartTimer = null;
     }
+    this.flushExitReport();
     const transport = this.transport;
     if (!transport) {
       this.setState('stopped');
@@ -340,6 +385,7 @@ export class MirroirManager extends EventEmitter {
    * which would skip that cleanup).
    */
   async terminate(reason: string): Promise<void> {
+    this.flushExitReport();
     const pid = this.pid;
     const transport = this.transport;
     this.intentionalClose = true;
