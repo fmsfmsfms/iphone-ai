@@ -82,7 +82,6 @@ export function Sidebar({ route, collapsed, onToggleCollapsed, onShowShortcuts }
         {!collapsed ? (
           <div className="min-w-0 leading-tight">
             <p className="truncate text-[14px] font-semibold tracking-tight text-foreground">{t('app.name')}</p>
-            <p className="truncate text-[11px] text-muted">{t('app.tagline')}</p>
           </div>
         ) : null}
       </div>

@@ -4,7 +4,6 @@
 
 export const enMessages: Record<string, string> = {
   'app.name': 'iPhone AI',
-  'app.tagline': 'via Mirroir',
 
   'common.cancel': 'Cancel',
   'common.close': 'Close',
@@ -475,7 +474,6 @@ export const enMessages: Record<string, string> = {
 
 export const arMessages: Record<string, string> = {
   'app.name': 'iPhone AI',
-  'app.tagline': 'عبر Mirroir',
 
   'common.cancel': 'إلغاء',
   'common.close': 'إغلاق',
